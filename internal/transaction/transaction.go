@@ -11,12 +11,13 @@ type Transaction struct {
 	ID        string
 	Timestamp int64
 	PublKey   string
+	Nonce     uint64
 	Sig       []byte
 	Type      byte
 	Data      json.RawMessage
 }
 
-func NewTransaction(publKey string, transactionType byte, data any) (*Transaction, error) {
+func NewTransaction(publKey string, transactionType byte, nonce uint64, data any) (*Transaction, error) {
 
 	dataBytes, err := json.Marshal(data)
 	if err != nil {
@@ -25,6 +26,7 @@ func NewTransaction(publKey string, transactionType byte, data any) (*Transactio
 	tx := &Transaction{
 		Timestamp: time.Now().UnixNano(),
 		PublKey:   publKey,
+		Nonce:     nonce,
 		Type:      transactionType,
 		Data:      dataBytes,
 	}
