@@ -1,91 +1,34 @@
-// internal\core\block.go
+// package core defines the essential data structures for the blockchain ledger.
 package core
 
+//internal\core\block.go
 import (
-	"sort"
-	"time"
+	. "github.com/diskrat/dominium/internal/transaction"
 )
 
+// Header contains the metadata of a block.
+// It is used by miners to perform Proof of Work and by nodes to verify the chain's integrity.
 type Header struct {
-	HashOfPrevious     string
-	MerkleRootHash     string
-	Timestamp          int64
-	Nbits              int32 //dificuldade
-	Nonce              int32
-	TransactionCounter uint16
-	Hash               string
+	HashOfPrevious     []byte // the SHA-256 hash of the previous block's header.
+	MerkleRootHash     []byte // the root hash of all transactions included in the block's body.
+	Timestamp          int64  // the Unix time when the block was created.
+	Nbits              int32  // the difficulty target for the mining process (number of required leading zeros).
+	Nonce              int32  // the counter used by miners to find a valid hash for Proof of Work.
+	TransactionCounter uint16 // the total number of transactions contained within the block.
+	Hash               []byte // the final valid hash of this current block header.
+	MinerID            string
 }
 
-type Transaction struct {
-	TXid string
-	Data string
-	Fee  int64
-	Time int64
-}
-
+// Body represents the payload of the block.
+// It stores the list of validated transactions that have been confirmed.
 type Body struct {
-	Transactions []Transaction
+	Transactions []Transaction // slice of all transactions processed in this block.
 }
 
+// Block represents a single link in the blockchain.
+// It is composed of a Header (metadata) and a Body (transaction data).
 type Block struct {
-	Header
-	Body
+	Header // embedded header structure.
+	Body   // embedded body structure.
 }
 
-// fabricamos a transacao e mandamos para a mempool
-func NewAndPostTransaction(m *Mempool, id string, data string, fee int64) *Transaction {
-	//recebemos e empacotamos
-	tx := &Transaction{
-		TXid: id,
-		Data: data,
-		Fee:  fee,
-	}
-
-	//adicionamos na mempool
-	m.Adicionar(*tx)
-
-	//retorno para quem chamou nao ficar no escuro
-	return tx
-}
-
-//extrai transações da mempool e prepara o Bloco
-func (m *Mempool) MontarProximoBloco(prevHash string, dificuldade int) *Block {
-	m.mu.RLock() 
-	defer m.mu.RUnlock()
-
-	var selecionadas []Transaction
-	
-    //puxa todas as transações da mempool para uma slice
-	for _, tx := range m.Transactions {
-		selecionadas = append(selecionadas, tx)
-	}
-
-    // ordenamos a lista com base no fee (do maior para o menor)
-	sort.Slice(selecionadas, func(i, j int) bool {
-		return selecionadas[i].Fee > selecionadas[j].Fee
-	})
-
-    //cortamos a lista para ter no máximo 10 transações (valor que limitei para testes) -> as que pagam mais
-    if len(selecionadas) > 10 {
-        selecionadas = selecionadas[:10]
-    }
-
-	//apos preparar as transacoes escolhidas do bloco, agrupamos no body do bloco
-	corpo := Body{Transactions: selecionadas}
-
-	//montamos o restante da estrutura do bloco e mineramos com o gerarmerkleroot
-	cabecalho := Header{
-		HashOfPrevious:     prevHash, //se for genesis 0, se nao, colocar o ultimo da cadeia
-		MerkleRootHash:     corpo.GerarMerkleRoot(),
-		Timestamp:          time.Now().Unix(), //gera hora atual
-		Nbits:              int32(dificuldade), //numero de zeros para minerar
-		TransactionCounter: uint16(len(selecionadas)), 
-		Nonce:              0,  //init
-	}
-
-	//usa-se ponteiro para n criar copias desnecessarias e passar o valor por referencia
-	return &Block{
-		Header: cabecalho,
-		Body:   corpo,
-	}
-}

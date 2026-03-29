@@ -1,77 +1,56 @@
-// internal\core\miner.go
+// package core handles the mining process and block assembly logic.
 package core
 
 import (
-	"crypto/sha256"
-	"fmt"
-	"strings"
+	"time"
+
+	"github.com/diskrat/dominium/internal/transaction"
 )
 
+// Miner represents the entity responsible for solving the Proof of Work.
 type Miner struct {
-	Dificuldade int
+	ID string
 }
 
-func NovoMinerador(dif int) *Miner {
-	return &Miner{Dificuldade: dif}
+// NewMiner creates a new Miner instance.
+func NewMiner(id string) *Miner {
+	return &Miner{ID: id}
 }
 
-func (m *Miner) Minar(bloco *Block) string {
-	target := strings.Repeat("0", m.Dificuldade) // Ex: "0000" se dif for 4
-
+// BlockMiner performs the Proof of Work loop to find a valid hash.
+// It increments the Nonce until the hex representation of the hash starts with N zeros.
+func (m *Miner) BlockMiner(block *Block) []byte {
 	for {
-		// geramos o hash do cabeçalho atual
-		hash := m.CalcularHash(bloco.Header)
-
-		// verificamos se o hash atende à dificuldade
-		if strings.HasPrefix(hash, target) {
-			bloco.Header.Hash = hash // Salvamos o hash vencedor
+		// Calculate the raw hash
+		hash := CalculateBlockHash(block.Header) 
+		
+		// NEW LOGIC: Check if the HEX string has the required number of zeros.
+		// Difficulty 4 now correctly requires "0000", which is much faster than 4 full bytes.
+		if CheckDifficulty(hash, block.Header.Nbits) {
+			block.Header.Hash = hash
 			return hash
 		}
-
-		// sSe n deu certo, incrementamos o nonce e tentamos de novo
-		bloco.Header.Nonce++
+		
+		// Increment nonce to change the hash in the next iteration
+		block.Header.Nonce++
 	}
 }
 
-//  calcular o hash transforma os dados do header em uma string SHA-256 (prova de trabalhjo)
-func (m *Miner) CalcularHash(h Header) string {
-    dados := fmt.Sprintf("%s%s%d%d%d", 
-        h.HashOfPrevious, h.MerkleRootHash, h.Timestamp, h.Nbits, h.Nonce)
-    
-    hash := sha256.Sum256([]byte(dados))
-    return fmt.Sprintf("%x", hash) //retorno em hexadecimal
-}
+// AssemblerNextBlockMiner prepares a new block using a pre-validated list of transactions.
+func AssemblerNextBlockMiner(validatedTxs []transaction.Transaction, prevHash []byte, difficulty int32) *Block {
+	body := Body{Transactions: validatedTxs}
 
-func (b *Body) GerarMerkleRoot() string {
-    var hashes []string
+	header := Header{
+		HashOfPrevious:     prevHash,
+		MerkleRootHash:     GenMerkleRoot(validatedTxs),
+		Timestamp:          time.Now().Unix(),
+		Nbits:              difficulty,
+		TransactionCounter: uint16(len(validatedTxs)),
+		Nonce:              0, 
+	}
 
-    // primeiro, tiramos o hash individual de cada transaçao
-    for _, tx := range b.Transactions {
-        hashTx := sha256.Sum256([]byte(tx.TXid + tx.Data))
-        hashes = append(hashes, fmt.Sprintf("%x", hashTx))
-    }
-
-    // se não houver 10 transações, retornamos um hash vazio para as transacoes faltantes
-    if len(hashes) == 0 {
-        return ""
-    }
-
-    //subindo a arvore ate sobrar apenas um hash (a root)
-    for len(hashes) > 1 {
-        // Se o numero de hashes for impar, duplicamos o ultimo para parear
-        if len(hashes)%2 != 0 {
-            hashes = append(hashes, hashes[len(hashes)-1])
-        }
-
-        //gpt me acuda
-        var nivelSuperior []string
-        for i := 0; i < len(hashes); i += 2 {
-            combinado := hashes[i] + hashes[i+1]
-            hashPai := sha256.Sum256([]byte(combinado))
-            nivelSuperior = append(nivelSuperior, fmt.Sprintf("%x", hashPai))
-        }
-        hashes = nivelSuperior
-    }
-
-    return hashes[0] //hash do merkleroot
+	return &Block{
+		Header: header, 
+		Body:   body,
+	}
 }
