@@ -42,7 +42,7 @@ func DecodePublicKey(pubHex string) (*ecdsa.PublicKey, error) {
 
 	pub, ok := parsed.(*ecdsa.PublicKey)
 	if !ok {
-		return nil, errors.New("invalid public key type")
+		return nil, errors.New("tipo de chave publica invalido")
 	}
 	return pub, nil
 }

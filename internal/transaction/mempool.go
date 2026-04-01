@@ -2,50 +2,85 @@ package transaction
 
 import (
 	"errors"
+	"sort"
 	"sync"
 )
 
 type Mempool struct {
 	mu           sync.RWMutex
-	transactions map[string]*Transaction
-	state        *AccountState // <-- ADIÇÃO 1: A mempool agora guarda uma referência do estado
+	transactions map[string]Tx
+	state        *AccountState
 }
 
-// ADIÇÃO 2: O construtor agora exige que você passe o estado global da blockchain
 func NewMempool(state *AccountState) *Mempool {
 	return &Mempool{
-		transactions: make(map[string]*Transaction),
+		transactions: make(map[string]Tx),
 		state:        state,
 	}
 }
 
-// ADIÇÃO 3: O método Add deixa de ser um "stub" e passa a fazer a validação real
-func (m *Mempool) Add(tx *Transaction) error {
-	// 1. Delega toda a validação complexa (Assinatura, Saldo, Nonce, Tipo) para os contratos
-	if err := tx.Validate(m.state); err != nil {
-		return err // Se a transação for inválida, ela é barrada aqui e não entra na fila
+func (m *Mempool) Add(tx Tx) error {
+	if tx == nil {
+		return errors.New("transacao nula")
+	}
+	if tx.IDValue() == "" {
+		return errors.New("ID da transacao ausente")
 	}
 
-	// 2. Trava o mapa para escrita
+	m.mu.RLock()
+	state := m.state
+	m.mu.RUnlock()
+	if state == nil {
+		return errors.New("estado da mempool nao configurado")
+	}
+
+	if err := tx.Validate(state); err != nil {
+		return err
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// 3. Garante que a transação já não foi enviada antes (evita duplicidade na fila)
-	if _, exists := m.transactions[tx.ID]; exists {
+	if _, exists := m.transactions[tx.IDValue()]; exists {
 		return errors.New("transacao ja existe na mempool")
 	}
 
-	// 4. Salva a transação na memória
-	m.transactions[tx.ID] = tx
+	m.transactions[tx.IDValue()] = tx
 	return nil
 }
 
-func (m *Mempool) GetPending(limit int) []*Transaction {
+// RevalidateAgainst aplica suporte leve a reorg: troca o estado canônico usado
+// pela mempool e remove transações que ficaram inválidas neste novo contexto.
+func (m *Mempool) RevalidateAgainst(state *AccountState) (keptIDs []string, removedIDs []string, err error) {
+	if state == nil {
+		return nil, nil, errors.New("estado nulo")
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.state = state
+
+	for id, tx := range m.transactions {
+		if err := tx.Validate(state); err != nil {
+			delete(m.transactions, id)
+			removedIDs = append(removedIDs, id)
+			continue
+		}
+		keptIDs = append(keptIDs, id)
+	}
+
+	sort.Strings(keptIDs)
+	sort.Strings(removedIDs)
+	return keptIDs, removedIDs, nil
+}
+
+func (m *Mempool) GetPending(limit int) []Tx {
 
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	var pending []*Transaction
+	var pending []Tx
 	count := 0
 
 	for _, tx := range m.transactions {

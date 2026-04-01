@@ -3,7 +3,7 @@ package transaction
 import (
 	"crypto/ecdsa"
 	"dominium/pkg/crypto"
-	"encoding/json"
+	"errors"
 	"time"
 )
 
@@ -11,33 +11,49 @@ type Transaction struct {
 	ID        string
 	Timestamp int64
 	PublKey   string
-	Nonce     uint64
+	Recipient string
+	NFTID     string
 	Sig       []byte
 	Type      byte
-	Data      json.RawMessage
 }
 
-func NewTransaction(publKey string, transactionType byte, nonce uint64, data any) (*Transaction, error) {
+// Tx define o contrato minimo para validacao e execucao de transacoes.
+type Tx interface {
+	IDValue() string
+	Validate(state *AccountState) error
+	Execute(state *AccountState) error
+}
 
-	dataBytes, err := json.Marshal(data)
-	if err != nil {
-		return nil, err
-	}
+func NewTransaction(publKey string, recipient string, nftID string, transactionType byte) (*Transaction, error) {
 	tx := &Transaction{
 		Timestamp: time.Now().UnixNano(),
 		PublKey:   publKey,
-		Nonce:     nonce,
+		Recipient: recipient,
+		NFTID:     nftID,
 		Type:      transactionType,
-		Data:      dataBytes,
 	}
 	return tx, nil
 }
 
-func (tx *Transaction) IdCalc() error {
+func (tx *Transaction) ComputeID() (string, error) {
+	if tx == nil {
+		return "", errors.New("transacao nula")
+	}
+
 	txCopy := *tx
 	txCopy.ID = ""
 	txCopy.Sig = nil
+
 	hash, err := crypto.HashObject(txCopy)
+	if err != nil {
+		return "", err
+	}
+
+	return hash, nil
+}
+
+func (tx *Transaction) IdCalc() error {
+	hash, err := tx.ComputeID()
 	if err != nil {
 		return err
 	}
@@ -46,6 +62,13 @@ func (tx *Transaction) IdCalc() error {
 }
 
 func (tx *Transaction) Sign(sk *ecdsa.PrivateKey) error {
+	if tx == nil {
+		return errors.New("transacao nula")
+	}
+	if sk == nil {
+		return errors.New("chave privada nula")
+	}
+
 	if tx.ID == "" {
 		if err := tx.IdCalc(); err != nil {
 			return err
@@ -60,4 +83,11 @@ func (tx *Transaction) Sign(sk *ecdsa.PrivateKey) error {
 	}
 	tx.Sig = signature
 	return nil
+}
+
+func (tx *Transaction) IDValue() string {
+	if tx == nil {
+		return ""
+	}
+	return tx.ID
 }
