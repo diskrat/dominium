@@ -9,8 +9,6 @@ const (
 	TypeMintNFT     byte = 2
 )
 
-const AdminPubKey = "somekey"
-
 func (tx *Transaction) Validate(state *AccountState) error {
 	if tx == nil {
 		return errors.New("transacao nula")
@@ -33,9 +31,12 @@ func (tx *Transaction) Validate(state *AccountState) error {
 		return errors.New("integridade invalida: ID nao corresponde ao conteudo")
 	}
 
-	pubKey, err := DecodePublicKey(tx.PublKey)
-	if err != nil || !VerifyECDSA(pubKey, []byte(tx.ID), tx.Sig) {
+	payload, err := tx.Serialize()
+	if err != nil {
 		return errors.New("assinatura invalida")
+	}
+	if err := VerifySerialized(tx.PublKey, payload, tx.Sig); err != nil {
+		return err
 	}
 	if tx.NFTID == "" {
 		return errors.New("ID do NFT nao pode ser vazio")
@@ -47,13 +48,9 @@ func (tx *Transaction) Validate(state *AccountState) error {
 	switch tx.Type {
 
 	case TypeTransferNFT:
-		return state.ValidateNFT(tx.PublKey, tx.NFTID)
+		return state.ValidateTransferNFT(tx.PublKey, tx.Recipient, tx.NFTID)
 	case TypeMintNFT:
-
-		if tx.PublKey != AdminPubKey {
-			return errors.New("acesso negado: apenas o admin pode fazer mint")
-		}
-		return state.ValidateMintNFT(tx.PublKey, tx.NFTID)
+		return state.ValidateMintNFT(tx.PublKey, tx.Recipient, tx.NFTID)
 	default:
 		return errors.New("tipo de transacao desconhecido")
 	}

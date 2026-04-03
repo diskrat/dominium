@@ -5,10 +5,12 @@ import (
 	"sync"
 )
 
+// Account representa a posse atual de NFTs por uma chave publica.
 type Account struct {
 	NFTs map[string]bool
 }
 
+// Clone copia a conta.
 func (a *Account) Clone() *Account {
 	clonedNFTs := make(map[string]bool)
 	for k, v := range a.NFTs {
@@ -19,6 +21,7 @@ func (a *Account) Clone() *Account {
 	}
 }
 
+// AccountState mantem o estado de posse de NFTs.
 type AccountState struct {
 	mu           sync.RWMutex
 	Accounts     map[string]*Account
@@ -32,6 +35,7 @@ func NewAccountState() *AccountState {
 	}
 }
 
+// Clone copia todo o estado.
 func (s *AccountState) Clone() *AccountState {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -57,36 +61,49 @@ func (s *AccountState) getAccount(pubKey string) (*Account, bool) {
 	return acc, exists
 }
 
-func (s *AccountState) getOrCreateAccount(pubKey string) *Account {
-	acc, exists := s.Accounts[pubKey]
-	if exists {
-		return acc
+func (s *AccountState) CreateAccount(pubKey string) (*Account, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if pubKey == "" {
+		return nil, errors.New("chave publica vazia")
+	}
+	if _, exists := s.Accounts[pubKey]; exists {
+		return nil, errors.New("conta ja existe")
 	}
 
-	acc = &Account{
-		NFTs: make(map[string]bool),
-	}
+	acc := &Account{NFTs: make(map[string]bool)}
 	s.Accounts[pubKey] = acc
-	return acc
+	return acc, nil
 }
 
-func (s *AccountState) ValidateNFT(pubKey string, nftID string) error {
+func (s *AccountState) ValidateTransferNFT(senderPubKey, recipientPubKey, nftID string) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	acc, exists := s.getAccount(pubKey)
+	senderAcc, exists := s.getAccount(senderPubKey)
 	if !exists {
 		return errors.New("conta remetente inexistente")
 	}
-	if !acc.NFTs[nftID] {
+	if _, exists := s.getAccount(recipientPubKey); !exists {
+		return errors.New("conta destinatario inexistente")
+	}
+	if !senderAcc.NFTs[nftID] {
 		return errors.New("remetente nao possui este NFT")
 	}
 	return nil
 }
-func (s *AccountState) ValidateMintNFT(adminKey string, nftID string) error {
+
+func (s *AccountState) ValidateMintNFT(adminKey, recipientPubKey, nftID string) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
+	if _, exists := s.getAccount(adminKey); !exists {
+		return errors.New("conta admin inexistente")
+	}
+	if _, exists := s.getAccount(recipientPubKey); !exists {
+		return errors.New("conta destinatario inexistente")
+	}
 	if s.ExistingNFTs[nftID] {
 		return errors.New("este NFT já foi mintado")
 	}
@@ -98,8 +115,14 @@ func (s *AccountState) ApplyTransferNFT(senderPubKey, recipientPubKey, nftID str
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	senderAcc := s.getOrCreateAccount(senderPubKey)
-	recipientAcc := s.getOrCreateAccount(recipientPubKey)
+	senderAcc, senderExists := s.getAccount(senderPubKey)
+	if !senderExists {
+		return errors.New("conta remetente inexistente")
+	}
+	recipientAcc, recipientExists := s.getAccount(recipientPubKey)
+	if !recipientExists {
+		return errors.New("conta destinatario inexistente")
+	}
 
 	delete(senderAcc.NFTs, nftID)
 	recipientAcc.NFTs[nftID] = true
@@ -111,10 +134,15 @@ func (s *AccountState) ApplyMintNFT(adminKey, recipientPubKey, nftID string) err
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	_ = s.getOrCreateAccount(adminKey)
+	if _, exists := s.getAccount(adminKey); !exists {
+		return errors.New("conta admin inexistente")
+	}
 	s.ExistingNFTs[nftID] = true
 
-	recipientAcc := s.getOrCreateAccount(recipientPubKey)
+	recipientAcc, exists := s.getAccount(recipientPubKey)
+	if !exists {
+		return errors.New("conta destinatario inexistente")
+	}
 	recipientAcc.NFTs[nftID] = true
 
 	return nil

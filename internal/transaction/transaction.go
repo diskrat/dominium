@@ -1,58 +1,103 @@
 package transaction
 
 import (
+	"bytes"
 	"crypto/ecdsa"
-	"dominium/pkg/crypto"
+	"encoding/binary"
 	"errors"
 	"time"
+
+	"dominium/pkg/crypto"
 )
 
+// Transaction representa uma transacao assinada de NFT.
 type Transaction struct {
 	ID        string
 	Timestamp int64
+	Sig       []byte
+	Type      byte
 	PublKey   string
 	Recipient string
 	NFTID     string
-	Sig       []byte
-	Type      byte
 }
 
-// Tx define o contrato minimo para validacao e execucao de transacoes.
-type Tx interface {
-	IDValue() string
-	Validate(state *AccountState) error
-	Execute(state *AccountState) error
+func NewTransaction(publKey, recipient, nftID string, transactionType byte) (*Transaction, error) {
+	return NewTransactionWithTimestamp(publKey, recipient, nftID, transactionType, time.Now().UnixNano())
 }
 
-func NewTransaction(publKey string, recipient string, nftID string, transactionType byte) (*Transaction, error) {
+func NewTransactionWithTimestamp(publKey, recipient, nftID string, transactionType byte, timestamp int64) (*Transaction, error) {
 	tx := &Transaction{
-		Timestamp: time.Now().UnixNano(),
+		Timestamp: timestamp,
+		Type:      transactionType,
 		PublKey:   publKey,
 		Recipient: recipient,
 		NFTID:     nftID,
-		Type:      transactionType,
 	}
 	return tx, nil
 }
 
+// Serialize retorna uma representacao canonica da transacao sem ID/assinatura.
+func (tx *Transaction) Serialize() ([]byte, error) {
+	if tx == nil {
+		return nil, errors.New("transacao nula")
+	}
+
+	buf := bytes.NewBuffer(nil)
+	if err := buf.WriteByte(tx.Type); err != nil {
+		return nil, err
+	}
+	if err := binary.Write(buf, binary.BigEndian, tx.Timestamp); err != nil {
+		return nil, err
+	}
+	if err := writeString(buf, tx.PublKey); err != nil {
+		return nil, err
+	}
+	if err := writeString(buf, tx.Recipient); err != nil {
+		return nil, err
+	}
+	if err := writeString(buf, tx.NFTID); err != nil {
+		return nil, err
+	}
+
+	return buf.Bytes(), nil
+}
+
+// VerifySerialized valida a assinatura para um payload ja serializado.
+func VerifySerialized(publicKeyHex string, payload []byte, signature []byte) error {
+	if publicKeyHex == "" || len(payload) == 0 || len(signature) == 0 {
+		return errors.New("assinatura invalida")
+	}
+	pubKey, err := DecodePublicKey(publicKeyHex)
+	if err != nil || !VerifyECDSA(pubKey, payload, signature) {
+		return errors.New("assinatura invalida")
+	}
+	return nil
+}
+
+func writeString(buf *bytes.Buffer, value string) error {
+	data := []byte(value)
+	if err := binary.Write(buf, binary.BigEndian, uint32(len(data))); err != nil {
+		return err
+	}
+	_, err := buf.Write(data)
+	return err
+}
+
+// ComputeID calcula o ID canonicamente a partir do payload serializado.
 func (tx *Transaction) ComputeID() (string, error) {
 	if tx == nil {
 		return "", errors.New("transacao nula")
 	}
 
-	txCopy := *tx
-	txCopy.ID = ""
-	txCopy.Sig = nil
-
-	hash, err := crypto.HashObject(txCopy)
+	payload, err := tx.Serialize()
 	if err != nil {
 		return "", err
 	}
 
-	return hash, nil
+	return crypto.Hash(payload), nil
 }
 
-func (tx *Transaction) IdCalc() error {
+func (tx *Transaction) SetID() error {
 	hash, err := tx.ComputeID()
 	if err != nil {
 		return err
@@ -70,14 +115,17 @@ func (tx *Transaction) Sign(sk *ecdsa.PrivateKey) error {
 	}
 
 	if tx.ID == "" {
-		if err := tx.IdCalc(); err != nil {
+		if err := tx.SetID(); err != nil {
 			return err
 		}
 	}
 
-	idBytes := []byte(tx.ID)
+	payload, err := tx.Serialize()
+	if err != nil {
+		return err
+	}
 
-	signature, err := SignECDSA(sk, idBytes)
+	signature, err := SignECDSA(sk, payload)
 	if err != nil {
 		return err
 	}
@@ -85,7 +133,7 @@ func (tx *Transaction) Sign(sk *ecdsa.PrivateKey) error {
 	return nil
 }
 
-func (tx *Transaction) IDValue() string {
+func (tx *Transaction) GetID() string {
 	if tx == nil {
 		return ""
 	}

@@ -2,10 +2,16 @@ package transaction
 
 import (
 	"errors"
-	"sort"
 	"sync"
 )
 
+type Tx interface {
+	GetID() string
+	Validate(state *AccountState) error
+	Execute(state *AccountState) error
+}
+
+// Mempool armazena transacoes pendentes.
 type Mempool struct {
 	mu           sync.RWMutex
 	transactions map[string]Tx
@@ -23,7 +29,7 @@ func (m *Mempool) Add(tx Tx) error {
 	if tx == nil {
 		return errors.New("transacao nula")
 	}
-	if tx.IDValue() == "" {
+	if tx.GetID() == "" {
 		return errors.New("ID da transacao ausente")
 	}
 
@@ -41,38 +47,12 @@ func (m *Mempool) Add(tx Tx) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if _, exists := m.transactions[tx.IDValue()]; exists {
+	if _, exists := m.transactions[tx.GetID()]; exists {
 		return errors.New("transacao ja existe na mempool")
 	}
 
-	m.transactions[tx.IDValue()] = tx
+	m.transactions[tx.GetID()] = tx
 	return nil
-}
-
-// RevalidateAgainst aplica suporte leve a reorg: troca o estado canônico usado
-// pela mempool e remove transações que ficaram inválidas neste novo contexto.
-func (m *Mempool) RevalidateAgainst(state *AccountState) (keptIDs []string, removedIDs []string, err error) {
-	if state == nil {
-		return nil, nil, errors.New("estado nulo")
-	}
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	m.state = state
-
-	for id, tx := range m.transactions {
-		if err := tx.Validate(state); err != nil {
-			delete(m.transactions, id)
-			removedIDs = append(removedIDs, id)
-			continue
-		}
-		keptIDs = append(keptIDs, id)
-	}
-
-	sort.Strings(keptIDs)
-	sort.Strings(removedIDs)
-	return keptIDs, removedIDs, nil
 }
 
 func (m *Mempool) GetPending(limit int) []Tx {

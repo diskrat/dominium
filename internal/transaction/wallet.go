@@ -17,21 +17,21 @@ type WalletIdentity struct {
 	PrivateKey string
 }
 
-// AccountDirectory guarda identidades em memoria para facilitar visualizacao de transferencias.
-type AccountDirectory struct {
+// AccountList guarda identidades em memoria para facilitar visualizacao de transferencias.
+type AccountList struct {
 	mu          sync.RWMutex
 	byName      map[string]*WalletIdentity
 	byPublicKey map[string]*WalletIdentity
 }
 
-func NewIdentityRegistry() *AccountDirectory {
-	return &AccountDirectory{
+func NewAccountList() *AccountList {
+	return &AccountList{
 		byName:      make(map[string]*WalletIdentity),
 		byPublicKey: make(map[string]*WalletIdentity),
 	}
 }
 
-func (r *AccountDirectory) CreateIdentity(name string) (*WalletIdentity, error) {
+func (r *AccountList) CreateIdentity(name string) (*WalletIdentity, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return nil, errors.New("nome nao pode ser vazio")
@@ -65,7 +65,7 @@ func (r *AccountDirectory) CreateIdentity(name string) (*WalletIdentity, error) 
 	return identity, nil
 }
 
-func (r *AccountDirectory) GetByName(name string) (*WalletIdentity, bool) {
+func (r *AccountList) GetByName(name string) (*WalletIdentity, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
@@ -73,7 +73,7 @@ func (r *AccountDirectory) GetByName(name string) (*WalletIdentity, bool) {
 	return identity, ok
 }
 
-func (r *AccountDirectory) NameByPublicKey(publicKey string) string {
+func (r *AccountList) NameByPublicKey(publicKey string) string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
@@ -84,7 +84,8 @@ func (r *AccountDirectory) NameByPublicKey(publicKey string) string {
 	return identity.Name
 }
 
-func (r *AccountDirectory) SignTransactionAs(name string, tx *Transaction) error {
+// SignTransactionAs assina uma transacao usando a identidade registrada.
+func (r *AccountList) SignTransactionAs(name string, tx *Transaction) error {
 	if tx == nil {
 		return errors.New("transacao nula")
 	}
@@ -108,6 +109,7 @@ func (r *AccountDirectory) SignTransactionAs(name string, tx *Transaction) error
 	return tx.Sign(privKey)
 }
 
+// EncodePrivateKey codifica a chave privada em hex para persistencia simples.
 func EncodePrivateKey(priv *ecdsa.PrivateKey) (string, error) {
 	if priv == nil {
 		return "", errors.New("chave privada nula")
@@ -120,6 +122,7 @@ func EncodePrivateKey(priv *ecdsa.PrivateKey) (string, error) {
 	return hex.EncodeToString(der), nil
 }
 
+// DecodePrivateKey decodifica a chave privada em hex.
 func DecodePrivateKey(privHex string) (*ecdsa.PrivateKey, error) {
 	privBytes, err := hex.DecodeString(privHex)
 	if err != nil {
