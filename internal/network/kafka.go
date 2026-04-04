@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"log"
+	"time"
 
 	"dominium/internal/miner"
 	"dominium/internal/transaction"
@@ -16,88 +17,154 @@ const (
 	TopicBlocks       = "dominium-blocks"
 )
 
-// P2P gerencia as conexões Kafka para simular a rede.
-type P2P struct {
+// KafkaTransactionTransport implementa TransactionSink e TransactionSource usando Kafka.
+type KafkaTransactionTransport struct {
+	ctx     context.Context
+	cancel  context.CancelFunc
 	brokers []string
 	nodeID  string
 }
 
-func NewP2P(brokers []string, nodeID string) *P2P {
-	return &P2P{
-		brokers: brokers,
-		nodeID:  nodeID,
-	}
+// KafkaBlockTransport implementa BlockSink e BlockSource usando Kafka.
+type KafkaBlockTransport struct {
+	ctx     context.Context
+	cancel  context.CancelFunc
+	brokers []string
+	nodeID  string
 }
 
-// PublishTransaction envia uma transação para a rede.
-func (n *P2P) PublishTransaction(ctx context.Context, tx *transaction.Transaction) error {
-	return n.publish(ctx, TopicTransactions, tx)
+// NewKafkaTransactionTransport cria um transportador Kafka para transações.
+func NewKafkaTransactionTransport(parent context.Context, brokers []string, nodeID string) *KafkaTransactionTransport {
+	ctx, cancel := context.WithCancel(parent)
+	return &KafkaTransactionTransport{ctx: ctx, cancel: cancel, brokers: brokers, nodeID: nodeID}
 }
 
-// PublishBlock envia um bloco recém-minerado para a rede.
-func (n *P2P) PublishBlock(ctx context.Context, block *miner.Block) error {
-	return n.publish(ctx, TopicBlocks, block)
+// NewKafkaBlockTransport cria um transportador Kafka para blocos.
+func NewKafkaBlockTransport(parent context.Context, brokers []string, nodeID string) *KafkaBlockTransport {
+	ctx, cancel := context.WithCancel(parent)
+	return &KafkaBlockTransport{ctx: ctx, cancel: cancel, brokers: brokers, nodeID: nodeID}
 }
 
-func (n *P2P) publish(ctx context.Context, topic string, message interface{}) error {
-	w := &kafka.Writer{
-		Addr:     kafka.TCP(n.brokers...),
-		Topic:    topic,
-		Balancer: &kafka.LeastBytes{},
-	}
-	defer w.Close()
-
-	msgBytes, err := json.Marshal(message)
+func (t *KafkaTransactionTransport) Publish(tx *transaction.Transaction) error {
+	data, err := json.Marshal(tx)
 	if err != nil {
 		return err
 	}
 
+	w := kafka.NewWriter(kafka.WriterConfig{
+		Brokers:  t.brokers,
+		Topic:    TopicTransactions,
+		Balancer: &kafka.LeastBytes{},
+	})
+	defer w.Close()
+
+	ctx, cancel := context.WithTimeout(t.ctx, 5*time.Second)
+	defer cancel()
+
 	return w.WriteMessages(ctx, kafka.Message{
-		Key:   []byte(n.nodeID), // A chave pode ser o ID do nó
-		Value: msgBytes,
+		Key:   []byte(t.nodeID),
+		Value: data,
 	})
 }
 
-// SubscribeTransactions escuta novas transações da rede de forma assíncrona.
-func (n *P2P) SubscribeTransactions(ctx context.Context, handler func(*transaction.Transaction)) {
-	n.subscribe(ctx, TopicTransactions, n.nodeID+"-tx-group", func(val []byte) {
-		var tx transaction.Transaction
-		if err := json.Unmarshal(val, &tx); err == nil {
-			handler(&tx)
-		}
-	})
-}
-
-// SubscribeBlocks escuta novos blocos propagados na rede.
-func (n *P2P) SubscribeBlocks(ctx context.Context, handler func(*miner.Block)) {
-	n.subscribe(ctx, TopicBlocks, n.nodeID+"-block-group", func(val []byte) {
-		var block miner.Block
-		if err := json.Unmarshal(val, &block); err == nil {
-			handler(&block)
-		}
-	})
-}
-
-func (n *P2P) subscribe(ctx context.Context, topic, groupID string, handler func([]byte)) {
+func (t *KafkaTransactionTransport) Subscribe(handler func(*transaction.Transaction) error) error {
 	r := kafka.NewReader(kafka.ReaderConfig{
-		Brokers:  n.brokers,
-		GroupID:  groupID, // O GroupID deve ser único por nó para que todos recebam o broadcast
-		Topic:    topic,
-		MaxBytes: 10e6, // 10MB
+		Brokers:  t.brokers,
+		GroupID:  t.nodeID + "-tx-group",
+		Topic:    TopicTransactions,
+		MinBytes: 1,
+		MaxBytes: 10e6,
 	})
 
 	go func() {
 		defer r.Close()
 		for {
-			m, err := r.ReadMessage(ctx)
+			m, err := r.ReadMessage(t.ctx)
 			if err != nil {
-				if ctx.Err() != nil {
-					return // Context cancelado
+				if t.ctx.Err() != nil {
+					return
 				}
-				log.Printf("erro ao ler mensagem do kafka (%s): %v", topic, err)
+				log.Printf("erro ao ler transacao do kafka: %v", err)
 				continue
 			}
-			handler(m.Value)
+
+			var tx transaction.Transaction
+			if err := json.Unmarshal(m.Value, &tx); err != nil {
+				log.Printf("transacao kafka invalida: %v", err)
+				continue
+			}
+
+			if err := handler(&tx); err != nil {
+				log.Printf("erro no handler de transacao: %v", err)
+			}
 		}
 	}()
+
+	return nil
+}
+
+func (t *KafkaBlockTransport) Publish(block *miner.Block) error {
+	data, err := json.Marshal(block)
+	if err != nil {
+		return err
+	}
+
+	w := kafka.NewWriter(kafka.WriterConfig{
+		Brokers:  t.brokers,
+		Topic:    TopicBlocks,
+		Balancer: &kafka.LeastBytes{},
+	})
+	defer w.Close()
+
+	ctx, cancel := context.WithTimeout(t.ctx, 5*time.Second)
+	defer cancel()
+
+	return w.WriteMessages(ctx, kafka.Message{
+		Key:   []byte(t.nodeID),
+		Value: data,
+	})
+}
+
+func (t *KafkaBlockTransport) Subscribe(handler func(*miner.Block) error) error {
+	r := kafka.NewReader(kafka.ReaderConfig{
+		Brokers:  t.brokers,
+		GroupID:  t.nodeID + "-block-group",
+		Topic:    TopicBlocks,
+		MinBytes: 1,
+		MaxBytes: 10e6,
+	})
+
+	go func() {
+		defer r.Close()
+		for {
+			m, err := r.ReadMessage(t.ctx)
+			if err != nil {
+				if t.ctx.Err() != nil {
+					return
+				}
+				log.Printf("erro ao ler bloco do kafka: %v", err)
+				continue
+			}
+
+			var block miner.Block
+			if err := json.Unmarshal(m.Value, &block); err != nil {
+				log.Printf("bloco kafka invalido: %v", err)
+				continue
+			}
+
+			if err := handler(&block); err != nil {
+				log.Printf("erro no handler de bloco: %v", err)
+			}
+		}
+	}()
+
+	return nil
+}
+
+func (t *KafkaTransactionTransport) Stop() {
+	t.cancel()
+}
+
+func (t *KafkaBlockTransport) Stop() {
+	t.cancel()
 }

@@ -56,6 +56,22 @@ func (s *AccountState) Clone() *AccountState {
 	}
 }
 
+func (s *AccountState) EnsureAccount(pubKey string) error {
+	if pubKey == "" {
+		return errors.New("chave publica vazia")
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, exists := s.Accounts[pubKey]; exists {
+		return nil
+	}
+
+	s.Accounts[pubKey] = &Account{NFTs: make(map[string]bool)}
+	return nil
+}
+
 func (s *AccountState) getAccount(pubKey string) (*Account, bool) {
 	acc, exists := s.Accounts[pubKey]
 	return acc, exists

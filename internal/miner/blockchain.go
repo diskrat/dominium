@@ -1,8 +1,10 @@
 package miner
 
 import (
+	"bytes"
 	"encoding/hex"
 	"errors"
+	"log"
 	"sync"
 )
 
@@ -36,6 +38,13 @@ func (bc *Blockchain) GetLatestHash() []byte {
 		return []byte{}
 	}
 	return bc.bestChain.Block.Hash
+}
+
+// IsEmpty retorna true quando a cadeia ainda nao possui nenhum bloco.
+func (bc *Blockchain) IsEmpty() bool {
+	bc.mu.RLock()
+	defer bc.mu.RUnlock()
+	return bc.bestChain == nil
 }
 
 // AddBlock tenta inserir um novo bloco na estrutura de árvore.
@@ -86,7 +95,12 @@ func (bc *Blockchain) AddBlock(newBlock Block) error {
 	// Aplica a REGRA DA CORRENTE MAIS LONGA (Nakamoto Consensus)
 	// Se a altura deste novo bloco for maior que a do bestChain atual, ele torna-se o novo tip oficial
 	if newNode.Height > bc.bestChain.Height {
+		oldHeight := bc.bestChain.Height
 		bc.bestChain = newNode
+		// Log de reorganização se houve mudança
+		if oldHeight != newNode.Height-1 {
+			log.Printf("[Consenso] Fork detectado! Altura Local: %d, Altura Recebida: %d. Mudando de cadeia.", oldHeight, newNode.Height)
+		}
 	}
 
 	return nil
@@ -116,4 +130,118 @@ func (bc *Blockchain) GetCanonicalChain() []Block {
 	}
 
 	return chain
+}
+
+// GetChainLength retorna o comprimento da corrente canônica atual.
+func (bc *Blockchain) GetChainLength() uint64 {
+	bc.mu.RLock()
+	defer bc.mu.RUnlock()
+
+	if bc.bestChain == nil {
+		return 0
+	}
+	return bc.bestChain.Height + 1
+}
+
+// GetBlockByHash retorna um bloco pelo seu hash, se existir.
+func (bc *Blockchain) GetBlockByHash(hash []byte) (*Block, bool) {
+	bc.mu.RLock()
+	defer bc.mu.RUnlock()
+
+	hashHex := hex.EncodeToString(hash)
+	node, exists := bc.blocks[hashHex]
+	if !exists {
+		return nil, false
+	}
+	return &node.Block, true
+}
+
+// FindCommonAncestor encontra o ancestral comum entre duas cadeias.
+func (bc *Blockchain) FindCommonAncestor(hash1, hash2 []byte) ([]byte, error) {
+	hash1Hex := hex.EncodeToString(hash1)
+	hash2Hex := hex.EncodeToString(hash2)
+
+	node1, exists1 := bc.blocks[hash1Hex]
+	node2, exists2 := bc.blocks[hash2Hex]
+
+	if !exists1 || !exists2 {
+		return nil, errors.New("um dos blocos nao existe")
+	}
+
+	// Caminha para cima nas duas cadeias até encontrar um ancestral comum
+	ancestors1 := make(map[string]bool)
+	current := node1
+	for current != nil {
+		ancestors1[hex.EncodeToString(current.Block.Hash)] = true
+		current = current.Parent
+	}
+
+	current = node2
+	for current != nil {
+		if ancestors1[hex.EncodeToString(current.Block.Hash)] {
+			return current.Block.Hash, nil
+		}
+		current = current.Parent
+	}
+
+	return nil, errors.New("ancestral comum nao encontrado")
+}
+
+// Reorganize reorganiza a blockchain para uma nova corrente mais longa.
+func (bc *Blockchain) Reorganize(newTipHash []byte) ([]Block, []Block, error) {
+	bc.mu.Lock()
+	defer bc.mu.Unlock()
+
+	newTipHex := hex.EncodeToString(newTipHash)
+	newTipNode, exists := bc.blocks[newTipHex]
+	if !exists {
+		return nil, nil, errors.New("novo tip nao encontrado")
+	}
+
+	if bc.bestChain == nil {
+		bc.bestChain = newTipNode
+		return nil, []Block{newTipNode.Block}, nil
+	}
+
+	// Encontra o ancestral comum
+	commonAncestorHash, err := bc.FindCommonAncestor(bc.bestChain.Block.Hash, newTipHash)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Se o ancestral comum é o bestChain atual, não há reorganização necessária
+	if bytes.Equal(commonAncestorHash, bc.bestChain.Block.Hash) {
+		return nil, nil, nil
+	}
+
+	// Coleta blocos a serem desconectados (da corrente antiga)
+	var blocksToDisconnect []Block
+	current := bc.bestChain
+	for current != nil {
+		currentHash := hex.EncodeToString(current.Block.Hash)
+		commonHashHex := hex.EncodeToString(commonAncestorHash)
+		if currentHash == commonHashHex {
+			break
+		}
+		blocksToDisconnect = append(blocksToDisconnect, current.Block)
+		current = current.Parent
+	}
+
+	// Coleta blocos a serem conectados (da nova corrente)
+	var blocksToConnect []Block
+	current = newTipNode
+	for current != nil {
+		currentHash := hex.EncodeToString(current.Block.Hash)
+		commonHashHex := hex.EncodeToString(commonAncestorHash)
+		if currentHash == commonHashHex {
+			break
+		}
+		blocksToConnect = append([]Block{current.Block}, blocksToConnect...) // prepend
+		current = current.Parent
+	}
+
+	// Executa a reorganização
+	bc.bestChain = newTipNode
+
+	return blocksToDisconnect, blocksToConnect, nil
 }

@@ -9,6 +9,43 @@ const (
 	TypeMintNFT     byte = 2
 )
 
+// ValidateConsensusRules valida regras específicas de consenso além da validação básica
+func (tx *Transaction) ValidateConsensusRules(state *AccountState, adminPubKey string) error {
+	if tx == nil {
+		return errors.New("transacao nula")
+	}
+	if state == nil {
+		return errors.New("estado nulo")
+	}
+
+	switch tx.Type {
+	case TypeMintNFT:
+		// Regra de autoridade: apenas admin pode mintar
+		if tx.PublKey != adminPubKey {
+			return errors.New("apenas admin pode executar mint")
+		}
+		// Regra de unicidade: NFT não pode já existir
+		if state.ExistingNFTs[tx.NFTID] {
+			return errors.New("NFT ja foi mintado")
+		}
+
+	case TypeTransferNFT:
+		// Regra de posse: sender deve ter o NFT
+		senderAcc, exists := state.Accounts[tx.PublKey]
+		if !exists {
+			return errors.New("conta do sender inexistente")
+		}
+		if !senderAcc.NFTs[tx.NFTID] {
+			return errors.New("sender nao possui este NFT")
+		}
+
+	default:
+		return errors.New("tipo de transacao desconhecido")
+	}
+
+	return nil
+}
+
 func (tx *Transaction) Validate(state *AccountState) error {
 	if tx == nil {
 		return errors.New("transacao nula")
