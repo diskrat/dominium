@@ -6,13 +6,12 @@
 
 - Docker
 - Docker Compose v2+
-- Go 1.21+ (apenas para gerar chaves, opcional)
 
-### Opção 1: Execução Rápida (com chaves padrão)
+### Opção 1: Execução Rápida
 
 ```bash
-# Copie o arquivo de exemplo
-cp .env.example .env
+# Gere o arquivo .env (usa chaves padrão)
+bash generate-env.sh
 
 # Inicie todos os serviços
 docker-compose up -d
@@ -24,16 +23,6 @@ docker-compose up -d
 - 📊 Visualizer: http://localhost:8080
 - ⛏️ 3 Nós Mineradores: node-1, node-2, node-3
 - 🐳 Kafka: localhost:9092
-
-### Opção 2: Execução com Chaves Novas
-
-```bash
-# Gerar novo arquivo .env com chaves admin
-bash generate-env.sh
-
-# Inicie todos os serviços
-docker-compose up -d
-```
 
 ### Monitorar Logs
 
