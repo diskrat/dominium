@@ -83,3 +83,9 @@ func (m *Mempool) Remove(txIDs []string) {
 		delete(m.transactions, id)
 	}
 }
+
+func (m *Mempool) Count() int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return len(m.transactions)
+}
