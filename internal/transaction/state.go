@@ -147,3 +147,9 @@ func (s *AccountState) ApplyMintNFT(adminKey, recipientPubKey, nftID string) err
 
 	return nil
 }
+
+func (s *AccountState) Stats() (accounts int, nfts int) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.Accounts), len(s.ExistingNFTs)
+}

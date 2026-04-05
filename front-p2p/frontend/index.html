@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Blockchain Property Registry - Visualizador</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>⛓️ Blockchain de Registro de Imóveis</h1>
+            <div class="header-info">
+                <span id="node-status" class="status">Conectando...</span>
+                <span id="block-count">Blocos: 0</span>
+                <span id="mempool-count">Mempool: 0</span>
+            </div>
+        </header>
+
+        <div class="controls">
+            <div class="node-selector">
+                <label for="node-url">Selecione o Nó:</label>
+                <select id="node-url">
+                    <option value="http://localhost:8080">Nó 1 (8080)</option>
+                    <option value="http://localhost:8081">Nó 2 (8081)</option>
+                    <option value="http://localhost:8082">Nó 3 (8082)</option>
+                </select>
+            </div>
+
+            <div class="difficulty-control">
+                <label for="difficulty-input">Dificuldade:</label>
+                <input id="difficulty-input" type="number" min="0" max="8" step="1" value="2" />
+                <button id="set-difficulty-btn" class="btn">Aplicar</button>
+                <span id="difficulty-feedback" class="difficulty-feedback"></span>
+            </div>
+
+            <button id="refresh-btn" class="btn">Atualizar</button>
+        </div>
+
+        <div class="dashboard">
+            <div class="chain-view">
+                <h2>📜 Cadeia de Blocos</h2>
+                <div id="chain-container" class="chain-container">
+                    <div class="loading">Carregando cadeia de blocos...</div>
+                </div>
+            </div>
+
+            <div class="side-panel">
+                <div class="fork-view">
+                    <h2>🔀 Forks Ativos</h2>
+                    <div id="forks-container" class="forks-container">
+                        <div class="empty">Nenhum fork detectado</div>
+                    </div>
+                </div>
+
+                <div class="stats-view">
+                    <h2>📊 Estatísticas</h2>
+                    <div id="stats-container" class="stats-container">
+                        <div class="stat">
+                            <span class="stat-label">Dificuldade:</span>
+                            <span class="stat-value" id="difficulty">4</span>
+                        </div>
+                        <div class="stat">
+                            <span class="stat-label">Trabalho Acumulado:</span>
+                            <span class="stat-value" id="total-work">0</span>
+                        </div>
+                        <div class="stat">
+                            <span class="stat-label">Último Bloco:</span>
+                            <span class="stat-value" id="last-block-time">-</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="block-details" id="block-details" style="display: none;">
+            <h2>📋 Detalhes do Bloco</h2>
+            <div id="block-details-content"></div>
+            <button id="close-details" class="btn btn-secondary">Fechar</button>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
