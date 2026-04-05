@@ -21,11 +21,19 @@
             <div class="node-selector">
                 <label for="node-url">Selecione o Nó:</label>
                 <select id="node-url">
-                    <option value="/api/node1">Nó 1</option>
-                    <option value="/api/node2">Nó 2</option>
-                    <option value="/api/node3">Nó 3</option>
+                    <option value="http://localhost:8080">Nó 1 (8080)</option>
+                    <option value="http://localhost:8081">Nó 2 (8081)</option>
+                    <option value="http://localhost:8082">Nó 3 (8082)</option>
                 </select>
             </div>
+
+            <div class="difficulty-control">
+                <label for="difficulty-input">Dificuldade:</label>
+                <input id="difficulty-input" type="number" min="0" max="8" step="1" value="2" />
+                <button id="set-difficulty-btn" class="btn">Aplicar</button>
+                <span id="difficulty-feedback" class="difficulty-feedback"></span>
+            </div>
+
             <button id="refresh-btn" class="btn">Atualizar</button>
         </div>
 

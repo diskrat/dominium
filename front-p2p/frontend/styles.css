@@ -68,6 +68,40 @@ header h1 {
     gap: 15px;
     margin-bottom: 20px;
     flex-wrap: wrap;
+    align-items: center;
+}
+
+.difficulty-control {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.difficulty-control input {
+    width: 72px;
+    padding: 8px 10px;
+    border-radius: 5px;
+    border: 1px solid #333;
+    background: #1a1a2e;
+    color: #e0e0e0;
+    font-size: 1rem;
+}
+
+.difficulty-feedback {
+    font-size: 0.85rem;
+}
+
+.difficulty-feedback.pending {
+    color: #ffeb3b;
+}
+
+.difficulty-feedback.success {
+    color: #00c853;
+}
+
+.difficulty-feedback.error {
+    color: #ff1744;
 }
 
 .node-selector {
@@ -275,9 +309,9 @@ header h1 {
     border: 2px solid #00d4ff;
     border-radius: 15px;
     padding: 30px;
-    max-width: 600px;
-    width: 90%;
-    max-height: 80vh;
+    max-width: 900px;
+    width: min(95vw, 900px);
+    max-height: 85vh;
     overflow-y: auto;
     z-index: 1000;
     box-shadow: 0 0 50px rgba(0, 212, 255, 0.3);
@@ -292,8 +326,15 @@ header h1 {
     margin-bottom: 20px;
 }
 
+.block-details-content,
+.block-details-content * {
+    overflow-wrap: anywhere;
+}
+
 .detail-row {
     display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
     padding: 10px;
     border-bottom: 1px solid #333;
 }
@@ -303,7 +344,7 @@ header h1 {
 }
 
 .detail-label {
-    width: 150px;
+    min-width: 150px;
     color: #aaa;
     font-weight: 500;
 }
@@ -329,6 +370,15 @@ header h1 {
     padding: 10px;
     border-radius: 5px;
     margin-bottom: 10px;
+    max-width: 100%;
+    overflow-x: auto;
+}
+
+.tx-item pre {
+    white-space: pre-wrap;
+    word-break: break-word;
+    overflow-wrap: anywhere;
+    max-width: 100%;
 }
 
 .tx-type {
@@ -366,4 +416,17 @@ header h1 {
 
 .mining {
     animation: pulse 2s infinite;
+}
+
+
+@media (max-width: 768px) {
+    .block-details {
+        padding: 16px;
+        width: 96vw;
+        max-height: 88vh;
+    }
+
+    .detail-label {
+        min-width: 100%;
+    }
 }
