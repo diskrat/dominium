@@ -1,0 +1,27 @@
+FROM golang:1.25-alpine AS builder
+
+WORKDIR /app
+
+# Copia arquivos de teste
+COPY go.mod ./
+COPY mocks/ ./mocks/
+COPY tests/mock_server.go ./
+
+# Build do mock server
+RUN go build -o mock-server tests/mock_server.go
+
+FROM alpine:3.22
+
+WORKDIR /app
+
+RUN apk add --no-cache wget
+
+COPY --from=builder /app/mock-server .
+
+EXPOSE 9000
+
+ENV PORT=9000 \
+    AUTO_GENERATE_BLOCKS=true \
+    BLOCK_INTERVAL=10s
+
+CMD ["./mock-server"]
