@@ -79,20 +79,43 @@ Este projeto implementa uma blockchain distribuída baseada em Proof of Work (Po
 
 ## Como Executar
 
-### Pré-requisitos
+### Método Recomendado: Docker Compose (Tudo Automático)
+
+```bash
+# 1. Gerar configuração
+bash generate-env.sh
+
+# 2. Iniciar tudo (7 serviços simultaneamente)
+docker-compose up -d
+
+# 3. Acessar aplicações
+# - API Gateway: http://localhost:8085
+# - Visualizer: http://localhost:8080
+```
+
+**Serviços iniciados automaticamente:**
+
+- ✅ Zookeeper (coordenação)
+- ✅ Kafka (mensageria P2P)
+- ✅ 3 Nós mineradores (node-1, node-2, node-3)
+- ✅ API Gateway (porta 8085)
+- ✅ Visualizer (porta 8080)
+
+### Método Manual (Para Desenvolvimento)
+
+#### Pré-requisitos
 
 - Go 1.21+
 - Node.js 16+ (para o visualizer)
 - Docker e Docker Compose
 
-### 1. Iniciar Infraestrutura
+#### 1. Iniciar Infraestrutura
 
 ```bash
-# Inicia Kafka e Zookeeper
 docker-compose up -d kafka zookeeper
 ```
 
-### 2. Executar Nós Mineradores
+#### 2. Executar Nós Mineradores
 
 ```bash
 # Terminal 1: Nó 1
@@ -105,21 +128,18 @@ go run ./cmd/node -id node-2 -p2p localhost:9092 -mine -difficulty 4
 go run ./cmd/node -id node-3 -p2p localhost:9092 -mine -difficulty 4
 ```
 
-### 3. Iniciar API Gateway
+#### 3. Iniciar API Gateway
 
 ```bash
 # Terminal 4: API Gateway
 go run ./cmd/api -port 8085 -id api-gateway -p2p localhost:9092 \
-  -admin-key <ADMIN_PRIVATE_KEY> -admin-pub <ADMIN_PUBLIC_KEY>
+  -admin-key $(grep ADMIN_PRIVATE_KEY .env | cut -d'=' -f2) \
+  -admin-pub $(grep ADMIN_PUBLIC_KEY .env | cut -d'=' -f2)
 ```
 
-### 4. Executar Visualizer (Opcional)
+#### 4. Executar Visualizer
 
 ```bash
-# Opção 1: Sistema completo automatizado (recomendado)
-./run-full-system.sh
-
-# Opção 2: Manual
 cd web && npm install && npm run build && cd ..
 go build -o visualizer ./cmd/visualizer
 ./visualizer
@@ -127,44 +147,37 @@ go build -o visualizer ./cmd/visualizer
 
 ## Reprodutibilidade e Testes Determinísticos
 
-### Configuração Inicial (Obrigatório)
+### Configuração Inicial (Automática)
 
 ```bash
-# 1. Gerar chaves admin (sempre as mesmas para reprodutibilidade)
-go run generate-admin-keys.go
-
-# Output esperado:
-# Admin Private Key: 3081a40201010420... (64 chars)
-# Admin Public Key:  3059301306072a86... (128 chars)
+# Gerar arquivo .env com chaves padrão (sempre as mesmas)
+bash generate-env.sh
 ```
 
 ### Execução Determinística (Para Apresentação)
 
 ```bash
-# 1. Iniciar infraestrutura
+# Tudo em um comando
+docker-compose up -d
+
+# Ou manual para controle fino:
 docker-compose up -d kafka zookeeper
-
-# 2. Nó 1 (minerador)
 go run ./cmd/node -id node-1 -p2p localhost:9092 -mine -difficulty 4
-
-# 3. Nó 2 (minerador) - em outro terminal
 go run ./cmd/node -id node-2 -p2p localhost:9092 -mine -difficulty 4
-
-# 4. Nó 3 (minerador) - em outro terminal
 go run ./cmd/node -id node-3 -p2p localhost:9092 -mine -difficulty 4
-
-# 5. API Gateway - em outro terminal
 go run ./cmd/api -port 8085 -id api-gateway -p2p localhost:9092 \
-  -admin-key $(cat admin_private.key) -admin-pub $(cat admin_public.key)
-
-# 6. Visualizer - em outro terminal
-go build -o visualizer ./cmd/visualizer
-./visualizer
+  -admin-key $(grep ADMIN_PRIVATE_KEY .env | cut -d'=' -f2) \
+  -admin-pub $(grep ADMIN_PUBLIC_KEY .env | cut -d'=' -f2)
 ```
 
 ### Teste de Dificuldade (Demonstração de 20% da Nota)
 
 ```bash
+# Com Docker Compose - alterar dificuldade no .env
+echo "NETWORK_DIFFICULTY=8" >> .env
+docker-compose up -d
+
+# Ou manual:
 # Dificuldade baixa (rápido - ~1 segundo)
 go run ./cmd/node -id node-test -p2p localhost:9092 -mine -difficulty 8
 

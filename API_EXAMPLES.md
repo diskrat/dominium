@@ -2,14 +2,24 @@
 
 ## Preparação
 
-### 1. Gerar identidade admin
+### 1. Sistema Rodando
 
 ```bash
-# Criar identidade e extrair chaves em hex
-go run ./cmd/api -port 8085 -id api-gateway \
-  -admin-key "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQg..." \
-  -admin-pub "0x04..."
+# Iniciar tudo com Docker Compose
+bash generate-env.sh
+docker-compose up -d
+
+# API estará disponível em: http://localhost:8085
 ```
+
+### 2. Chaves Admin (já configuradas automaticamente)
+
+As chaves admin são definidas automaticamente no arquivo `.env`:
+
+- `ADMIN_PRIVATE_KEY` - Para assinar transações de mint
+- `ADMIN_PUBLIC_KEY` - Chave pública correspondente
+
+**Não é necessário gerar chaves manualmente!**
 
 ## Exemplos de Requisições
 
@@ -200,7 +210,7 @@ curl -X GET http://localhost:8085/network/status
 8. **Opcional**: Inicie o visualizer para monitoramento
 
 ```bash
-./run-full-system.sh
+# Sistema já está rodando com Docker Compose
 # Acesse: http://localhost:8080
 ```
 

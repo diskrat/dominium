@@ -98,8 +98,9 @@ O sistema Dominium inclui um **Visualizer Web** para monitoramento e testes:
 ### Como Executar o Visualizer
 
 ```bash
-# Script completo (recomendado)
-./run-full-system.sh
+# Docker Compose (recomendado)
+bash generate-env.sh
+docker-compose up -d
 
 # Ou manualmente
 cd web && npm install && npm run build && cd ..

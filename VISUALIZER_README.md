@@ -30,13 +30,19 @@ Visualizador de Rede e Simulador de Ataques para a blockchain Dominium - uma fer
 
 ## Como Executar
 
-### Opção 1: Sistema Completo (Recomendado)
+### Opção 1: Sistema Completo com Docker Compose (Recomendado)
 
 ```bash
-./run-full-system.sh
+# Gerar configuração
+bash generate-env.sh
+
+# Iniciar tudo automaticamente
+docker-compose up -d
+
+# Acessar: http://localhost:8080
 ```
 
-Este script inicia **tudo automaticamente**:
+Este comando inicia **tudo automaticamente**:
 
 - Kafka + Zookeeper
 - 3 nós mineradores
