@@ -1,0 +1,65 @@
+version: '3.8'
+
+services:
+  # Mock Backend Server
+  mock-backend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.mock
+    container_name: blockchain-mock-backend
+    ports:
+      - "9000:9000"
+    environment:
+      - PORT=9000
+      - AUTO_GENERATE_BLOCKS=true
+      - BLOCK_INTERVAL=10s
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:9000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - test-network
+
+  # Frontend
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: blockchain-frontend-test
+    ports:
+      - "8080:80"
+    depends_on:
+      mock-backend:
+        condition: service_healthy
+    environment:
+      - BACKEND_URL=http://mock-backend:9000
+    networks:
+      - test-network
+    volumes:
+      - ./frontend:/usr/share/nginx/html:ro
+
+  # RabbitMQ Mock (opcional, para testes de integração)
+  rabbitmq-mock:
+    image: rabbitmq:3-management-alpine
+    container_name: blockchain-rabbitmq-mock
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      - RABBITMQ_DEFAULT_USER=guest
+      - RABBITMQ_DEFAULT_PASS=guest
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "check_running"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - test-network
+
+networks:
+  test-network:
+    driver: bridge
+
+volumes:
+  mock-data:
