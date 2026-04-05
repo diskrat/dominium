@@ -4,6 +4,7 @@ class BlockchainViewer {
         this.blocks = [];
         this.forks = [];
         this.stats = {};
+        this.lastKnownDifficulty = null;
         this.pollingInterval = 2000;
         document.getElementById('node-url').value = this.nodeURL;
         this.init();
@@ -94,6 +95,9 @@ class BlockchainViewer {
     async fetchStats() {
         try {
             const response = await fetch(`${this.nodeURL}/stats`);
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+            }
             this.stats = await response.json();
         } catch (error) {
             this.stats = {};
@@ -178,13 +182,21 @@ class BlockchainViewer {
             return;
         }
 
-        const difficulty = this.stats?.difficulty ?? this.blocks[this.blocks.length - 1]?.difficulty ?? 0;
+        const statsDifficulty = Number.isFinite(Number(this.stats?.difficulty)) ? Number(this.stats.difficulty) : null;
+        const lastBlockDifficulty = Number.isFinite(Number(this.blocks[this.blocks.length - 1]?.difficulty))
+            ? Number(this.blocks[this.blocks.length - 1].difficulty)
+            : null;
+        const difficulty = statsDifficulty ?? lastBlockDifficulty ?? this.lastKnownDifficulty;
         const totalWork = this.stats?.total_work ?? 0;
-        document.getElementById('difficulty').textContent = difficulty;
+        document.getElementById('difficulty').textContent = difficulty ?? '-';
         document.getElementById('total-work').textContent = Number(totalWork).toLocaleString();
 
         const input = document.getElementById('difficulty-input');
-        if (input) {
+        if (difficulty !== null) {
+            this.lastKnownDifficulty = difficulty;
+        }
+
+        if (input && difficulty !== null && document.activeElement !== input) {
             input.value = difficulty;
         }
 
@@ -215,20 +227,44 @@ class BlockchainViewer {
         feedback.className = 'difficulty-feedback pending';
 
         try {
-            const response = await fetch(`${this.nodeURL}/difficulty?value=${value}`, { method: 'POST' });
-            if (!response.ok) {
-                const msg = await response.text();
-                throw new Error(msg || 'falha ao atualizar dificuldade');
-            }
-
-            const result = await response.json();
-            feedback.textContent = `Dificuldade atualizada para ${result.difficulty}.`;
+            const result = await this.postDifficulty(value);
+            const newDifficulty = Number.isFinite(Number(result?.difficulty)) ? Number(result.difficulty) : value;
+            this.lastKnownDifficulty = newDifficulty;
+            feedback.textContent = `Dificuldade atualizada para ${newDifficulty}.`;
             feedback.className = 'difficulty-feedback success';
             await this.fetchData();
         } catch (error) {
             feedback.textContent = `Erro ao atualizar dificuldade: ${error.message}`;
             feedback.className = 'difficulty-feedback error';
         }
+    }
+
+    async postDifficulty(value) {
+        const endpoints = [
+            `${this.nodeURL}/difficulty?value=${value}`,
+            `${this.nodeURL}/api/difficulty?value=${value}`
+        ];
+
+        let onlyNotFound = true;
+        let lastError = 'endpoint de dificuldade nao encontrado';
+        for (const url of endpoints) {
+            const response = await fetch(url, { method: 'POST' });
+            if (response.ok) {
+                return response.json();
+            }
+            const text = await response.text();
+            lastError = text || `HTTP ${response.status}`;
+            if (response.status !== 404) {
+                onlyNotFound = false;
+                break;
+            }
+        }
+
+        if (onlyNotFound) {
+            throw new Error('endpoint de dificuldade indisponivel neste no (reinicie com a versao mais recente)');
+        }
+
+        throw new Error(lastError);
     }
 
     showBlockDetailsByHash(hash) {

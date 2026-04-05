@@ -130,6 +130,7 @@ func (n *Node) Start() error {
 	mux.HandleFunc("/mempool", n.handleMempool)
 	mux.HandleFunc("/stats", n.handleStats)
 	mux.HandleFunc("/difficulty", n.handleDifficulty)
+	mux.HandleFunc("/api/difficulty", n.handleDifficulty)
 	mux.HandleFunc("/api/transactions", n.handleAddTransaction)
 
 	n.httpServer = &http.Server{Addr: n.apiAddr, Handler: withCORS(mux)}
