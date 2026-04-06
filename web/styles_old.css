@@ -1,0 +1,388 @@
+/* --- Global Styles --- */
+body {
+    font-family: "Segoe UI", Tahoma, Geneva, sans-serif;
+    background-color: #121212;
+    color: #ffffff;
+    margin: 0;
+    padding: 20px;
+}
+
+header {
+    text-align: center;
+    margin-bottom: 20px;
+}
+
+h1 {
+    color: #00e676;
+    margin-bottom: 5px;
+}
+h2 {
+    color: #aaa;
+    font-size: 1.2em;
+    border-bottom: 1px solid #333;
+    padding-bottom: 10px;
+    margin-top: 30px;
+}
+
+/* --- Control Panel --- */
+.settings-panel {
+    background: #1e1e1e;
+    padding: 20px;
+    border-radius: 8px;
+    margin-bottom: 20px;
+    text-align: center;
+    border: 1px solid #333;
+}
+
+.slider-container {
+    margin: 15px 0;
+}
+
+input[type="range"] {
+    width: 250px;
+    cursor: pointer;
+    accent-color: #00e676;
+}
+
+.diff-label {
+    color: #00e676;
+    font-weight: bold;
+    font-size: 1.2em;
+    margin-left: 10px;
+}
+
+.controls {
+    display: flex;
+    justify-content: center;
+    gap: 15px;
+    margin-top: 10px;
+}
+
+button {
+    padding: 12px 24px;
+    border: none;
+    border-radius: 5px;
+    font-weight: bold;
+    cursor: pointer;
+    transition: all 0.2s;
+    font-size: 1em;
+}
+
+.btn-normal {
+    background-color: #00e676;
+    color: #000;
+}
+.btn-blue {
+    background-color: #2196f3;
+    color: white;
+}
+.btn-attack {
+    background-color: #ff5252;
+    color: #fff;
+}
+
+button:hover {
+    transform: scale(1.05);
+    opacity: 0.9;
+}
+
+/* --- Novo Layout em Linhas --- */
+.network-container {
+    display: flex;
+    flex-direction: column;
+    gap: 25px;
+}
+
+.node-row {
+    display: grid;
+    grid-template-columns: 450px 1fr; /* Info fixo na esquerda, Blockchain expande na direita */
+    gap: 20px;
+    background: #181818;
+    border: 1px solid #333;
+    border-radius: 12px;
+    padding: 20px;
+    align-items: start;
+}
+
+.node-info {
+    border-right: 1px solid #333;
+    padding-right: 20px;
+}
+
+.node-blockchain {
+    overflow-x: auto; /* Permite scroll horizontal da blockchain dentro da linha */
+    padding-left: 10px;
+}
+
+.blockchain-scroll {
+    display: flex;
+    gap: 15px;
+    align-items: center;
+    padding-bottom: 10px;
+}
+
+/* Redimensionando blocos para caberem na linha lateral */
+.node-blockchain .block {
+    min-width: 280px;
+    padding: 15px;
+    background: #222;
+    font-size: 0.9em;
+}
+/* --- Global e Linhas --- */
+.network-container {
+    display: flex;
+    flex-direction: column;
+    gap: 30px;
+}
+
+.node-row {
+    display: grid;
+    grid-template-columns: 400px 1fr; /* Info esquerda, Chain direita */
+    gap: 20px;
+    background: #181818;
+    border: 1px solid #333;
+    border-radius: 12px;
+    padding: 20px;
+    align-items: center;
+}
+
+.node-info-panel {
+    border-right: 1px solid #333;
+    padding-right: 20px;
+}
+
+/* --- A CADEIA HORIZONTAL --- */
+.node-blockchain-panel {
+    overflow-x: auto; /* Scroll lateral se a chain crescer */
+    padding: 10px;
+}
+
+.blockchain-mini-container {
+    display: flex;
+    flex-direction: row; /* Força horizontal */
+    align-items: center;
+    gap: 15px;
+}
+
+.block {
+    flex-shrink: 0; /* IMPEDE O BLOCO DE DIMINUIR */
+    background: #222;
+    border: 2px solid #333;
+    border-radius: 8px;
+    width: 220px; /* Largura fixa para os blocos da esteira */
+    padding: 15px;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+}
+
+.arrow {
+    font-size: 20px;
+    color: #444;
+    flex-shrink: 0;
+}
+
+.hash {
+    font-family: monospace;
+    color: #00e676;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.tx-list {
+    background: #1a1a1a;
+    border-radius: 4px;
+    padding: 8px;
+    font-size: 0.8em;
+    border: 1px solid #222;
+}
+
+.node-blockchain h3 {
+    margin-top: 0;
+    color: #666;
+    font-size: 0.9em;
+    text-transform: uppercase;
+}
+
+/* Aumente um pouco a largura do bloco para caber melhor os dados */
+.block {
+    flex-shrink: 0;
+    background: #222;
+    border: 2px solid #333;
+    border-radius: 8px;
+    width: 280px; /* Aumentado de 220px para 280px */
+    padding: 15px;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+    display: flex;
+    flex-direction: column;
+}
+
+.block-info {
+    font-size: 0.75em;
+    color: #bbb;
+    background: #1a1a1a;
+    padding: 8px;
+    border-radius: 4px;
+    border: 1px dashed #444;
+}
+
+.block-info p {
+    margin: 2px 0;
+}
+
+/* Tratamento crítico para Hashes longos */
+.full-hash {
+    font-family: "Courier New", Courier, monospace;
+    color: #00e676;
+    word-wrap: break-word; /* Força a quebra de linha se for muito longo */
+    word-break: break-all;
+    line-height: 1.2;
+    margin-bottom: 8px !important;
+}
+
+.full-hash.prev {
+    color: #ff5252;
+}
+
+/* Ajuste sutil na lista de transações para manter o padrão visual */
+.tx-list {
+    background: #1a1a1a;
+    border-radius: 4px;
+    padding: 8px;
+    font-size: 0.85em;
+    border: 1px solid #333;
+    max-height: 80px;
+    overflow-y: auto;
+    margin-top: auto; /* Empurra a lista para o fim do bloco */
+}
+
+.node-card {
+    background: #181818;
+    border: 1px solid #333;
+    border-radius: 8px;
+    padding: 20px;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.5);
+}
+
+.node-title {
+    margin-top: 0;
+    font-size: 1.3em;
+    border-bottom: 1px dashed #444;
+    padding-bottom: 10px;
+    margin-bottom: 15px;
+}
+
+.node-card h3 {
+    color: #aaa;
+    font-size: 1em;
+    margin: 0 0 10px 0;
+}
+
+.node-data-split {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 15px;
+}
+
+.mempool-container,
+.state-container {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-height: 250px;
+    overflow-y: auto;
+    padding: 12px;
+    background: #1a1a1a;
+    border-radius: 8px;
+    border: 1px dashed #444;
+}
+
+.mempool-container {
+    border-color: #f39c12;
+}
+.state-container {
+    border-color: #00e676;
+}
+
+.mempool-tx,
+.state-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: #2c2c2c;
+    padding: 10px 15px;
+    border-radius: 4px;
+    font-size: 0.85em;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+.mempool-tx {
+    border-left: 4px solid #f39c12;
+    animation: fadeIn 0.3s ease-in;
+}
+.state-item {
+    border-left: 4px solid #00e676;
+}
+
+.tx-details,
+.owner-details {
+    color: #aaa;
+    font-size: 0.8em;
+}
+
+/* --- Blockchain View --- */
+.blockchain-container {
+    display: flex;
+    overflow-x: auto;
+    padding-bottom: 20px;
+    padding-top: 10px;
+    gap: 20px;
+    align-items: center;
+}
+
+.block {
+    background: #1e1e1e;
+    border: 1px solid #333;
+    border-radius: 8px;
+    min-width: 350px;
+    padding: 20px;
+    box-shadow: 0 4px 10px rgba(0, 0, 0, 0.4);
+}
+
+.hash {
+    font-family: monospace;
+    color: #00e676;
+    word-break: break-all;
+    font-size: 0.85em;
+}
+.prev-hash {
+    font-family: monospace;
+    color: #ff5252;
+    word-break: break-all;
+    font-size: 0.75em;
+}
+
+.arrow {
+    font-size: 24px;
+    color: #444;
+}
+
+.tx-list {
+    background: #252525;
+    padding: 12px;
+    border-radius: 4px;
+    margin-top: 15px;
+    max-height: 120px;
+    overflow-y: auto;
+    font-size: 0.85em;
+    border: 1px solid #333;
+}
+
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(-5px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
