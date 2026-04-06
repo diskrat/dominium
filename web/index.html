@@ -1,135 +1,77 @@
-<!doctype html>
-<html lang="en">
-    <head>
-        <meta charset="UTF-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-        <title>Dominium - Block Explorer</title>
-        <link rel="stylesheet" href="styles.css" />
-    </head>
-    <body>
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Blockchain Property Registry - Visualizador</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
         <header>
-            <h1>Dominium Ledger</h1>
-            <p>Real-Time P2P Network Monitoring</p>
+            <h1>⛓️ Blockchain de Registro de Imóveis</h1>
+            <div class="header-info">
+                <span id="node-status" class="status">Conectando...</span>
+                <span id="block-count">Blocos: 0</span>
+                <span id="mempool-count">Mempool: 0</span>
+            </div>
         </header>
 
-        <section class="settings-panel">
-            <div class="slider-container">
-                <label for="diffSlider">Mining Difficulty (Nbits): </label>
-                <input
-                    type="range"
-                    id="diffSlider"
-                    min="0"
-                    max="32"
-                    value="2"
-                    onchange="updateDifficulty(this.value)"
-                />
-                <span id="diffVal" class="diff-label">2</span>
+        <div class="controls">
+            <div class="node-selector">
+                <label for="node-url">Selecione o Nó:</label>
+                <select id="node-url">
+                    <option value="/api/node1">Nó 1</option>
+                    <option value="/api/node2">Nó 2</option>
+                    <option value="/api/node3">Nó 3</option>
+                </select>
+            </div>
+            <button id="refresh-btn" class="btn">Atualizar</button>
+        </div>
+
+        <div class="dashboard">
+            <div class="chain-view">
+                <h2>📜 Cadeia de Blocos</h2>
+                <div id="chain-container" class="chain-container">
+                    <div class="loading">Carregando cadeia de blocos...</div>
+                </div>
             </div>
 
-            <div class="controls">
-                <button class="btn-normal" onclick="simulateManyTxs(10)">
-                    + Generate 10 Txs
-                </button>
-                <button class="btn-blue" onclick="simulateTx()">
-                    + Generate 1 Tx
-                </button>
-                <button class="btn-attack" onclick="simulateAttack()">
-                    Simulate Attack
-                </button>
-            </div>
-        </section>
+            <div class="side-panel">
+                <div class="fork-view">
+                    <h2>🔀 Forks Ativos</h2>
+                    <div id="forks-container" class="forks-container">
+                        <div class="empty">Nenhum fork detectado</div>
+                    </div>
+                </div>
 
-        <main class="network-container">
-            <div class="node-row" id="row-8080">
-                <div class="node-info-panel">
-                    <h2 class="node-title" style="color: #00e676">
-                        🟢 Node Alpha (8080)
-                    </h2>
-                    <div class="node-data-split">
-                        <div>
-                            <h3>Mempool</h3>
-                            <div
-                                class="mempool-container"
-                                id="mempool-8080"
-                            ></div>
+                <div class="stats-view">
+                    <h2>📊 Estatísticas</h2>
+                    <div id="stats-container" class="stats-container">
+                        <div class="stat">
+                            <span class="stat-label">Dificuldade:</span>
+                            <span class="stat-value" id="difficulty">4</span>
                         </div>
-                        <div>
-                            <h3>State</h3>
-                            <div class="state-container" id="state-8080"></div>
+                        <div class="stat">
+                            <span class="stat-label">Trabalho Acumulado:</span>
+                            <span class="stat-value" id="total-work">0</span>
+                        </div>
+                        <div class="stat">
+                            <span class="stat-label">Último Bloco:</span>
+                            <span class="stat-value" id="last-block-time">-</span>
                         </div>
                     </div>
                 </div>
-                <div class="node-blockchain-panel">
-                    <h3>Local Ledger</h3>
-                    <div
-                        class="blockchain-mini-container"
-                        id="chain-8080"
-                    ></div>
-                </div>
             </div>
+        </div>
 
-            <div class="node-row" id="row-8081">
-                <div class="node-info-panel">
-                    <h2 class="node-title" style="color: #2196f3">
-                        🔵 Node Beta (8081)
-                    </h2>
-                    <div class="node-data-split">
-                        <div>
-                            <h3>Mempool</h3>
-                            <div
-                                class="mempool-container"
-                                id="mempool-8081"
-                            ></div>
-                        </div>
-                        <div>
-                            <h3>State</h3>
-                            <div class="state-container" id="state-8081"></div>
-                        </div>
-                    </div>
-                </div>
-                <div class="node-blockchain-panel">
-                    <h3>Local Ledger</h3>
-                    <div
-                        class="blockchain-mini-container"
-                        id="chain-8081"
-                    ></div>
-                </div>
-            </div>
+        <div class="block-details" id="block-details" style="display: none;">
+            <h2>📋 Detalhes do Bloco</h2>
+            <div id="block-details-content"></div>
+            <button id="close-details" class="btn btn-secondary">Fechar</button>
+        </div>
+    </div>
 
-            <div class="node-row" id="row-8082">
-                <div class="node-info-panel">
-                    <h2 class="node-title" style="color: #9c27b0">
-                        🟣 Node Gamma (8082)
-                    </h2>
-                    <div class="node-data-split">
-                        <div>
-                            <h3>Mempool</h3>
-                            <div
-                                class="mempool-container"
-                                id="mempool-8082"
-                            ></div>
-                        </div>
-                        <div>
-                            <h3>State</h3>
-                            <div class="state-container" id="state-8082"></div>
-                        </div>
-                    </div>
-                </div>
-                <div class="node-blockchain-panel">
-                    <h3>Local Ledger</h3>
-                    <div
-                        class="blockchain-mini-container"
-                        id="chain-8082"
-                    ></div>
-                </div>
-            </div>
-        </main>
-
-        <section>
-            <h2>Blockchain (Confirmed Ledger)</h2>
-            <div class="blockchain-container" id="chain"></div>
-        </section>
-
-        <script src="scripts.js"></script>
-    </body>
+    <script src="app.js"></script>
+</body>
 </html>
