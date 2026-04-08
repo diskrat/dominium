@@ -1,6 +1,6 @@
 # Como Executar Dominium com Docker Compose
 
-## Inicie Tudo em Um Comando! 🚀
+## Inicie Tudo em Um Comando!
 
 ### Pré-requisitos
 
@@ -19,10 +19,10 @@ docker-compose up -d
 
 **Serviços ativos:**
 
-- 🌐 API Gateway: http://localhost:8085
-- 📊 Visualizer: http://localhost:8080
-- ⛏️ 3 Nós Mineradores: node-1, node-2, node-3
-- 🐳 Kafka: localhost:9092
+- API Gateway: http://localhost:8085
+- Visualizer: http://localhost:8080
+- 3 Nós Mineradores: node-1, node-2, node-3
+- Kafka: localhost:9092
 
 ### Monitorar Logs
 

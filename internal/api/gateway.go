@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -22,6 +23,7 @@ import (
 // BlockMetadata armazena informações sobre um bloco para exibição.
 type BlockMetadata struct {
 	Hash       string `json:"hash"`
+	ParentHash     string `json:"hash_of_previous"`
 	MinerID    string `json:"miner_id"`
 	Height     uint64 `json:"height"`
 	TxCount    int    `json:"tx_count"`
@@ -51,6 +53,9 @@ type TransactionResponse struct {
 	Status string `json:"status"`
 	Error  string `json:"error,omitempty"`
 }
+type DifficultyRequest struct {
+	Difficulty int32 `json:"difficulty"`
+}
 
 type Gateway struct {
 	ctx              context.Context
@@ -66,6 +71,7 @@ type Gateway struct {
 	blockchain       *miner.Blockchain
 	blockMetadata    map[string]*BlockMetadata
 	activeNodes      map[string]bool
+	mempool          map[string]*transaction.Transaction
 	mu               sync.RWMutex
 	networkSyncReady bool
 	adminPubKey      string
@@ -75,7 +81,7 @@ type Gateway struct {
 func NewGateway(parent context.Context, id string, port int, brokers []string) *Gateway {
 	ctx, cancel := context.WithCancel(parent)
 	if len(brokers) == 0 {
-		brokers = []string{"localhost:9092"}
+		brokers = []string{"kafka:9092"}
 	}
 
 	gen := transaction.NewGenerator(time.Now().UnixNano())
@@ -92,6 +98,7 @@ func NewGateway(parent context.Context, id string, port int, brokers []string) *
 		blockchain:    miner.NewBlockchain(),
 		blockMetadata: make(map[string]*BlockMetadata),
 		activeNodes:   make(map[string]bool),
+		mempool:       make(map[string]*transaction.Transaction),
 	}
 }
 
@@ -102,6 +109,21 @@ func (g *Gateway) SetAdminIdentity(identity *transaction.WalletIdentity) error {
 	}
 	g.adminPubKey = identity.PublicKey
 	return g.generator.SetAdmin(identity)
+}
+
+func corsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, DELETE")
+		w.Header().Set("Access-Control-Allow-Headers", "Accept, Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization")
+
+		if r.Method == "OPTIONS" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
 }
 
 // Run inicia o servidor HTTP e a sincronização de rede.
@@ -132,10 +154,13 @@ func (g *Gateway) Run() error {
 	mux.HandleFunc("POST /transactions", g.handlePostTransaction)
 	mux.HandleFunc("GET /network/status", g.handleGetNetworkStatus)
 	mux.HandleFunc("GET /health", g.handleHealth)
+	mux.HandleFunc("POST /attacks/double-spend", g.handleDoubleSpendAttack)
+	mux.HandleFunc("GET /wallet/generate", g.handleGenerateWallet)
+	mux.HandleFunc("POST /network/difficulty", g.handleUpdateDifficulty)
 
 	g.server = &http.Server{
 		Addr:    fmt.Sprintf(":%d", g.port),
-		Handler: mux,
+		Handler: corsMiddleware(mux),
 	}
 
 	log.Printf("[%s] API Gateway iniciado em http://0.0.0.0:%d", g.id, g.port)
@@ -205,7 +230,6 @@ func (g *Gateway) syncBlockchainHistory() error {
 
 func (g *Gateway) subscribeBlocks() error {
 	return g.blockTransport.Subscribe(func(block *miner.Block) error {
-		// Extrai miner ID da chave da mensagem (será necessário melhorar isso)
 		return g.processBlock(block, nil)
 	})
 }
@@ -215,8 +239,11 @@ func (g *Gateway) processBlock(block *miner.Block, minerKeyBytes []byte) error {
 		return errors.New("bloco nulo")
 	}
 
-	minerID := ""
-	if minerKeyBytes != nil {
+	// 1. CAPTURA O NOME DO MINERADOR DIRETO DO BLOCO
+	minerID := block.Miner
+	
+	// Fallback de segurança caso a string venha vazia
+	if minerID == "" && minerKeyBytes != nil {
 		minerID = string(minerKeyBytes)
 	}
 
@@ -228,25 +255,32 @@ func (g *Gateway) processBlock(block *miner.Block, minerKeyBytes []byte) error {
 		return err
 	}
 
-	// Atualiza metadados
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
 	hashHex := hex.EncodeToString(block.Hash)
+	prevHashHex := hex.EncodeToString(block.HashOfPrevious) // 2. CAPTURA O HASH DO PAI
+
+	// 3. SALVA TODOS OS METADADOS INCLUINDO PAI E ALTURA ZERO (Que será ajustada no GET)
 	g.blockMetadata[hashHex] = &BlockMetadata{
 		Hash:       hashHex,
+		ParentHash: prevHashHex, 
 		MinerID:    minerID,
 		TxCount:    len(block.Transactions),
 		Timestamp:  block.Timestamp,
 		Difficulty: block.Nbits,
+		Height:     0, 
 	}
 
 	if minerID != "" {
 		g.activeNodes[minerID] = true
 	}
 
-	// Atualiza AccountState após processar transações
+	// Atualiza AccountState e LIMPA Mempool
 	for _, tx := range block.Transactions {
+		// Remove da mempool local pois já foi confirmada em um bloco
+		delete(g.mempool, tx.ID)
+
 		if err := g.state.EnsureAccount(tx.PublKey); err != nil {
 			log.Printf("[%s] erro ao garantir conta: %v", g.id, err)
 		}
@@ -254,10 +288,9 @@ func (g *Gateway) processBlock(block *miner.Block, minerKeyBytes []byte) error {
 			log.Printf("[%s] erro ao garantir recipient: %v", g.id, err)
 		}
 
-		// Valida regras de consenso antes de executar
 		if err := tx.ValidateConsensusRules(g.state, g.adminPubKey); err != nil {
 			log.Printf("[%s] bloco contem transacao que viola consenso: %v", g.id, err)
-			continue // Pula transação inválida mas continua processando o bloco
+			continue
 		}
 
 		if err := tx.Execute(g.state); err != nil {
@@ -307,10 +340,8 @@ func (g *Gateway) handlePostTransaction(w http.ResponseWriter, r *http.Request) 
 			json.NewEncoder(w).Encode(resp)
 			return
 		}
-
 		recIdentity := &transaction.WalletIdentity{PublicKey: req.Recipient}
 		tx, err = g.generator.MintTx(recIdentity, req.NFTID)
-
 	case "transfer":
 		if req.Sender == "" || req.Recipient == "" || req.NFTID == "" {
 			resp := TransactionResponse{Error: "sender, recipient e nft_id obrigatorios para transfer"}
@@ -319,11 +350,9 @@ func (g *Gateway) handlePostTransaction(w http.ResponseWriter, r *http.Request) 
 			json.NewEncoder(w).Encode(resp)
 			return
 		}
-
 		senderIdentity := &transaction.WalletIdentity{PublicKey: req.Sender}
 		recipientIdentity := &transaction.WalletIdentity{PublicKey: req.Recipient}
 		tx, err = g.generator.TransferTx(senderIdentity, recipientIdentity, req.NFTID)
-
 	default:
 		resp := TransactionResponse{Error: "tipo de transacao invalido: mint ou transfer"}
 		w.Header().Set("Content-Type", "application/json")
@@ -348,7 +377,6 @@ func (g *Gateway) handlePostTransaction(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Valida antes de publicar
 	if err := tx.Validate(g.state); err != nil {
 		resp := TransactionResponse{TxID: tx.ID, Error: fmt.Sprintf("validacao falhou: %v", err)}
 		w.Header().Set("Content-Type", "application/json")
@@ -357,7 +385,6 @@ func (g *Gateway) handlePostTransaction(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Valida regras de consenso específicas
 	if err := tx.ValidateConsensusRules(g.state, g.adminPubKey); err != nil {
 		resp := TransactionResponse{TxID: tx.ID, Error: fmt.Sprintf("consenso violado: %v", err)}
 		w.Header().Set("Content-Type", "application/json")
@@ -366,7 +393,7 @@ func (g *Gateway) handlePostTransaction(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Publica a transação
+	// Publica no Kafka
 	if err := g.txTransport.Publish(tx); err != nil {
 		resp := TransactionResponse{TxID: tx.ID, Error: fmt.Sprintf("falha ao publicar: %v", err)}
 		w.Header().Set("Content-Type", "application/json")
@@ -374,6 +401,11 @@ func (g *Gateway) handlePostTransaction(w http.ResponseWriter, r *http.Request) 
 		json.NewEncoder(w).Encode(resp)
 		return
 	}
+
+	// === NOVIDADE: Adiciona na mempool local para o Visualizer ver ===
+	g.mu.Lock()
+	g.mempool[tx.ID] = tx
+	g.mu.Unlock()
 
 	resp := TransactionResponse{
 		TxID:   tx.ID,
@@ -393,35 +425,93 @@ func (g *Gateway) handleGetNetworkStatus(w http.ResponseWriter, r *http.Request)
 	g.mu.RLock()
 	defer g.mu.RUnlock()
 
+	// 1. Coleta a Corrente Canônica (A linha principal/vencedora)
 	chain := g.blockchain.GetCanonicalChain()
 	canonicalChain := make([]BlockMetadata, 0, len(chain))
+	canonicalMap := make(map[string]uint64) // MAPA MODIFICADO: Guarda a Altura (Height)
 
 	for i, block := range chain {
 		hashHex := hex.EncodeToString(block.Hash)
+		canonicalMap[hashHex] = uint64(i) // Mapeia o Hash para a sua Altura Oficial
+
 		metadata := BlockMetadata{
 			Hash:       hashHex,
+			ParentHash: hex.EncodeToString(block.HashOfPrevious), // Captura o Pai na Canonical
 			Height:     uint64(i),
 			TxCount:    len(block.Transactions),
 			Timestamp:  block.Timestamp,
 			Difficulty: block.Nbits,
 		}
-
 		if stored, ok := g.blockMetadata[hashHex]; ok {
 			metadata.MinerID = stored.MinerID
 		}
-
 		canonicalChain = append(canonicalChain, metadata)
 	}
 
+	// 2. Coleta TODOS os blocos (Incluindo Forks/Orfãos)
+	allBlocks := make([]BlockMetadata, 0, len(g.blockMetadata))
+	for _, meta := range g.blockMetadata {
+		metaCopy := *meta
+		// Se o bloco faz parte da corrente principal, aplica a altura correta que mapeamos acima
+		if height, ok := canonicalMap[metaCopy.Hash]; ok {
+			metaCopy.Height = height
+		}
+		allBlocks = append(allBlocks, metaCopy)
+	}
+
+	// CRÍTICO PARA O REACT: Ordena todos os blocos cronologicamente
+	sort.Slice(allBlocks, func(i, j int) bool {
+		return allBlocks[i].Timestamp < allBlocks[j].Timestamp
+	})
+
+	// 3. Prepara Nós Ativos
 	activeNodes := make([]string, 0, len(g.activeNodes))
 	for node := range g.activeNodes {
 		activeNodes = append(activeNodes, node)
 	}
 
-	status := NetworkStatus{
+	// 4. Prepara Contas e ORDENA (Evita o efeito de "pular" na tabela)
+	type accountResp struct {
+		PublicKey string   `json:"publicKey"`
+		NFTs      []string `json:"nfts"`
+	}
+	allAccounts := g.state.GetAllAccounts()
+	accountsResponse := make([]accountResp, 0, len(allAccounts))
+	for pubKey, data := range allAccounts {
+		accountsResponse = append(accountsResponse, accountResp{
+			PublicKey: pubKey,
+			NFTs:      data.GetNFTsList(),
+		})
+	}
+	sort.Slice(accountsResponse, func(i, j int) bool {
+		return accountsResponse[i].PublicKey < accountsResponse[j].PublicKey
+	})
+
+	// 5. Prepara Mempool Real do mapa local do Gateway
+	mempoolResponse := make([]*transaction.Transaction, 0, len(g.mempool))
+	for _, tx := range g.mempool {
+		mempoolResponse = append(mempoolResponse, tx)
+	}
+	sort.Slice(mempoolResponse, func(i, j int) bool {
+		return mempoolResponse[i].Timestamp > mempoolResponse[j].Timestamp
+	})
+
+	// 6. Monta o Objeto Final de Status
+	status := struct {
+		NetworkHeight  int                        `json:"network_height"`
+		NodesActive    []string                   `json:"nodes_active"`
+		CanonicalChain []BlockMetadata            `json:"canonical_chain"`
+		AllBlocks      []BlockMetadata            `json:"all_blocks"`
+		Accounts       []accountResp              `json:"accounts"`
+		Mempool        []*transaction.Transaction `json:"mempool"`
+		Timestamp      int64                      `json:"timestamp"`
+	}{
 		NetworkHeight:  len(chain),
 		NodesActive:    activeNodes,
 		CanonicalChain: canonicalChain,
+		AllBlocks:      allBlocks,
+		Accounts:       accountsResponse,
+		Mempool:        mempoolResponse,
 		Timestamp:      time.Now().UnixNano(),
 	}
 
@@ -475,4 +565,145 @@ func (g *Gateway) shutdown() error {
 
 	g.cancel()
 	return nil
+}
+
+func (g *Gateway) handleDoubleSpendAttack(w http.ResponseWriter, r *http.Request) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	// 1. Localiza uma conta que tenha pelo menos um NFT
+	allAccounts := g.state.GetAllAccounts()
+	var targetPubKey string
+	var nftID string
+	
+	// Busca a primeira conta que possua pelo menos 1 NFT
+	for pubKey, acc := range allAccounts {
+		if acc != nil && len(acc.NFTs) > 0 {
+			targetPubKey = pubKey
+			
+			// Como NFTs é um map[string]bool, pegamos a primeira chave do mapa
+			for id := range acc.NFTs {
+				nftID = id
+				break // Pegamos apenas um NFT
+			}
+			break
+		}
+	}
+
+	if targetPubKey == "" || nftID == "" {
+		http.Error(w, "Nenhuma conta com NFTs disponível para ataque. Rode o Chaos Mint primeiro.", http.StatusBadRequest)
+		return
+	}
+	
+	// 2. Cria duas transações conflitantes (Tipo 1 = Transferência)
+	tx1 := transaction.Transaction{
+		ID:        "ATTACK_A_" + nftID,
+		PublKey:   targetPubKey,
+		Recipient: "DESTINATARIO_LEGITIMO",
+		NFTID:     nftID,
+		Type:      1, 
+		Timestamp: time.Now().UnixNano(),
+	}
+
+	tx2 := transaction.Transaction{
+		ID:        "ATTACK_B_" + nftID,
+		PublKey:   targetPubKey,
+		Recipient: "DESTINATARIO_HACKER",
+		NFTID:     nftID,
+		Type:      1, 
+		Timestamp: time.Now().UnixNano() + 1,
+	}
+
+	// 3. Dispara as duas para o Kafka passando os ponteiros
+	g.txTransport.Publish(&tx1)
+	g.txTransport.Publish(&tx2)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"status": "Ataque disparado",
+		"nft":    nftID,
+		"tx_a":   tx1.ID,
+		"tx_b":   tx2.ID,
+	})
+}
+
+func (g *Gateway) handleGenerateWallet(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "metodo nao permitido", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Usa as funções reais de criptografia da sua blockchain (ECDSA P-256)
+	privKey, pubKey, err := transaction.GenerateKeyPair()
+	if err != nil {
+		http.Error(w, "Erro ao gerar par de chaves", http.StatusInternalServerError)
+		return
+	}
+
+	encodedPriv, err := transaction.EncodePrivateKey(privKey)
+	if err != nil {
+		http.Error(w, "Erro ao codificar chave privada", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"public_key":  transaction.EncodePublicKey(pubKey),
+		"private_key": encodedPriv,
+	})
+}
+
+func (g *Gateway) handleUpdateDifficulty(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "metodo nao permitido", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req map[string]int32
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "payload invalido", http.StatusBadRequest)
+		return
+	}
+
+	newDifficulty := req["difficulty"]
+	if newDifficulty < 4 || newDifficulty > 64 {
+		http.Error(w, "dificuldade deve estar entre 4 e 64 bits", http.StatusBadRequest)
+		return
+	}
+
+	// 1. Cria a mensagem JSON de configuração
+	msgData := map[string]interface{}{
+		"type":      "DIFFICULTY_UPDATE",
+		"value":     newDifficulty,
+		"timestamp": time.Now().UnixNano(),
+	}
+	payload, _ := json.Marshal(msgData)
+
+	// 2. Configura um Escritor rápido para o tópico "network-config"
+	writer := kafka.NewWriter(kafka.WriterConfig{
+		Brokers:  g.brokers,
+		Topic:    "network-config",
+		Balancer: &kafka.LeastBytes{},
+	})
+	defer writer.Close()
+
+	// 3. Dispara a mensagem para a rede
+	err := writer.WriteMessages(context.Background(), kafka.Message{
+		Key:   []byte("config"),
+		Value: payload,
+	})
+
+	if err != nil {
+		log.Printf("[%s] ERRO ao propagar dificuldade: %v", g.id, err)
+		http.Error(w, "Erro ao propagar para a rede", http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("[%s] ADMIN: Comando propagado! Nova dificuldade global: %d bits", g.id, newDifficulty)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status": "success",
+		"new_difficulty": newDifficulty,
+	})
 }

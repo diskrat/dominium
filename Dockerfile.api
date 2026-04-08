@@ -1,5 +1,5 @@
 # Build stage
-FROM golang:1.21-alpine AS builder
+FROM golang:1.23-alpine AS builder
 
 WORKDIR /app
 
@@ -16,7 +16,7 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -o api ./cmd/api
 
 # Final stage
-FROM alpine:3.18
+FROM alpine:3.19
 
 RUN apk add --no-cache ca-certificates
 
@@ -40,4 +40,4 @@ HEALTHCHECK --interval=10s --timeout=5s --start-period=5s --retries=3 \
     CMD wget --quiet --tries=1 --spider http://localhost:8085/health || exit 1
 
 # Run the API
-CMD ["./api", "-port=${API_PORT}", "-id=${API_ID}", "-p2p=${P2P_BROKERS}", "-admin-key=${ADMIN_KEY}", "-admin-pub=${ADMIN_PUB}"]
+CMD ./api -port=${API_PORT} -id=${API_ID} -p2p=${P2P_BROKERS} -admin-key=${ADMIN_KEY} -admin-pub=${ADMIN_PUB}

@@ -38,7 +38,7 @@ func TestCalculateMerkleRoot(t *testing.T) {
 
 func TestPoWMining(t *testing.T) {
 	txs := []transaction.Transaction{createMockTx("genesis-nft")}
-	block := NewBlock([]byte("00000000"), txs, 8) // Dificuldade de 8 bits (1 byte) de zeros
+	block := NewBlock([]byte("00000000"), txs, 8,"NODE-1") // Dificuldade de 8 bits (1 byte) de zeros
 
 	Mine(block)
 
@@ -52,7 +52,7 @@ func TestBlockchainGenesisAndPersistence(t *testing.T) {
 	
 	// Criando bloco Genesis
 	txsGenesis := []transaction.Transaction{createMockTx("genesis")}
-	genesisBlock := NewBlock([]byte{}, txsGenesis, 4) // Baixa dificuldade para testes
+	genesisBlock := NewBlock([]byte{}, txsGenesis, 4, "NODE-1") // Baixa dificuldade para testes
 	Mine(genesisBlock)
 
 	err := bc.AddBlock(*genesisBlock)
@@ -67,7 +67,7 @@ func TestBlockchainGenesisAndPersistence(t *testing.T) {
 
 	// Bloco 2
 	txsBlock2 := []transaction.Transaction{createMockTx("nft-transfer-1")}
-	block2 := NewBlock(latestHash, txsBlock2, 4)
+	block2 := NewBlock(latestHash, txsBlock2, 4, "NODE-1")
 	Mine(block2)
 	
 	err = bc.AddBlock(*block2)
@@ -89,19 +89,19 @@ func TestBlockchainForksAndLongestChain(t *testing.T) {
 
 	// 1. Bloco Gênesis
 	txsGen := []transaction.Transaction{createMockTx("genesis")}
-	genBlock := NewBlock([]byte{}, txsGen, 1) // Dificuldade 1 bit para rapidez
+	genBlock := NewBlock([]byte{}, txsGen, 1, "NODE-1") // Dificuldade 1 bit para rapidez
 	Mine(genBlock)
 	bc.AddBlock(*genBlock)
 
 	// 2. Bloco A1 (Mina no topo do Gênesis)
 	txsA1 := []transaction.Transaction{createMockTx("A1")}
-	blockA1 := NewBlock(genBlock.Hash, txsA1, 1)
+	blockA1 := NewBlock(genBlock.Hash, txsA1, 1, "NODE-1")
 	Mine(blockA1)
 	bc.AddBlock(*blockA1)
 
 	// 3. Bloco B1 (Outro minerador, também apoia-se no Gênesis - GERANDO UM FORK)
 	txsB1 := []transaction.Transaction{createMockTx("B1")}
-	blockB1 := NewBlock(genBlock.Hash, txsB1, 1)
+	blockB1 := NewBlock(genBlock.Hash, txsB1, 1, "NODE-1")
 	Mine(blockB1)
 	bc.AddBlock(*blockB1)
 
@@ -113,7 +113,7 @@ func TestBlockchainForksAndLongestChain(t *testing.T) {
 
 	// 4. Bloco B2 (Apoia-se no B1 - resolve o fork a favor do Ramo B)
 	txsB2 := []transaction.Transaction{createMockTx("B2")}
-	blockB2 := NewBlock(blockB1.Hash, txsB2, 1)
+	blockB2 := NewBlock(blockB1.Hash, txsB2, 1, "NODE-1")
 	Mine(blockB2)
 	bc.AddBlock(*blockB2)
 

@@ -111,20 +111,18 @@ func (s *AccountState) ValidateTransferNFT(senderPubKey, recipientPubKey, nftID 
 }
 
 func (s *AccountState) ValidateMintNFT(adminKey, recipientPubKey, nftID string) error {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+    s.mu.RLock()
+    defer s.mu.RUnlock()
 
-	if _, exists := s.getAccount(adminKey); !exists {
-		return errors.New("conta admin inexistente")
-	}
-	if _, exists := s.getAccount(recipientPubKey); !exists {
-		return errors.New("conta destinatario inexistente")
-	}
-	if s.ExistingNFTs[nftID] {
-		return errors.New("este NFT já foi mintado")
-	}
+    if adminKey == "" || recipientPubKey == "" {
+        return errors.New("chaves admin e destinatario sao obrigatorias")
+    }
 
-	return nil
+    if s.ExistingNFTs[nftID] {
+        return errors.New("este NFT já foi mintado")
+    }
+
+    return nil
 }
 
 func (s *AccountState) ApplyTransferNFT(senderPubKey, recipientPubKey, nftID string) error {
@@ -147,19 +145,45 @@ func (s *AccountState) ApplyTransferNFT(senderPubKey, recipientPubKey, nftID str
 }
 
 func (s *AccountState) ApplyMintNFT(adminKey, recipientPubKey, nftID string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+    s.mu.Lock()
+    defer s.mu.Unlock()
 
-	if _, exists := s.getAccount(adminKey); !exists {
-		return errors.New("conta admin inexistente")
+    // Garante que a conta do Admin exista
+    if _, exists := s.Accounts[adminKey]; !exists {
+        s.Accounts[adminKey] = &Account{NFTs: make(map[string]bool)}
+    }
+
+    // Garante que a conta do Destinatário exista (Auto-registro)
+    if _, exists := s.Accounts[recipientPubKey]; !exists {
+        s.Accounts[recipientPubKey] = &Account{NFTs: make(map[string]bool)}
+    }
+
+    s.ExistingNFTs[nftID] = true
+    
+    // Agora o mapa de NFTs existe para o destinatário, podemos atribuir o NFT a ele
+    s.Accounts[recipientPubKey].NFTs[nftID] = true
+
+    return nil
+}
+
+// GetAllAccounts retorna uma cópia de segurança do mapa de contas para exportação na API.
+func (s *AccountState) GetAllAccounts() map[string]*Account {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	
+	// Criamos uma cópia para evitar problemas de concorrência no acesso direto
+	cloned := make(map[string]*Account)
+	for k, v := range s.Accounts {
+		cloned[k] = v.Clone()
 	}
-	s.ExistingNFTs[nftID] = true
+	return cloned
+}
 
-	recipientAcc, exists := s.getAccount(recipientPubKey)
-	if !exists {
-		return errors.New("conta destinatario inexistente")
+// GetNFTsList retorna a lista de IDs de NFTs como um slice de strings (formato que o React espera).
+func (a *Account) GetNFTsList() []string {
+	list := make([]string, 0, len(a.NFTs))
+	for nftID := range a.NFTs {
+		list = append(list, nftID)
 	}
-	recipientAcc.NFTs[nftID] = true
-
-	return nil
+	return list
 }

@@ -12,13 +12,13 @@ import (
 
 // Transaction representa uma transacao assinada de NFT.
 type Transaction struct {
-	ID        string
-	Timestamp int64
-	Sig       []byte
-	Type      byte
-	PublKey   string
-	Recipient string
-	NFTID     string
+	ID        string `json:"id"`
+	Timestamp int64  `json:"timestamp"`
+	Sig       []byte `json:"signature"`
+	Type      byte   `json:"type"`
+	PublKey   string `json:"publicKey"`
+	Recipient string `json:"recipient"`
+	NFTID     string `json:"nft_id"`
 }
 
 func NewTransaction(publKey, recipient, nftID string, transactionType byte) (*Transaction, error) {

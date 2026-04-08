@@ -2,10 +2,14 @@ package node
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
+	"net/http"
+	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -19,7 +23,7 @@ import (
 )
 
 const (
-	defaultBroker                 = "localhost:9092"
+	defaultBroker = "kafka:9092"
 	networkSilenceTimeout         = 10 * time.Second
 	bootstrapCommitInterval       = 1 * time.Second
 	kafkaReconnectDelay           = 2 * time.Second
@@ -44,25 +48,35 @@ type NodeServer struct {
 	synced        atomic.Bool
 	healthyKafka  atomic.Bool
 	bootstrapOnce sync.Once
+	apiPort int 
 }
 
 func NewNodeServer(parent context.Context, id string, brokers []string, mine bool, difficulty int32, dataDir string) *NodeServer {
 	ctx, cancel := context.WithCancel(parent)
-	if len(brokers) == 0 {
+	if len(brokers) == 0 || brokers[0] == "" {
 		brokers = []string{defaultBroker}
 	}
+
+	apiPort := 8081
+	if strings.HasPrefix(id, "node-") {
+		if num, err := strconv.Atoi(strings.TrimPrefix(id, "node-")); err == nil {
+			apiPort = 8081 + num
+		}
+	}
+
 	state := transaction.NewAccountState()
 	return &NodeServer{
-		ctx:        ctx,
-		cancel:     cancel,
-		id:         strings.TrimSpace(id),
-		brokers:    brokers,
-		mine:       mine,
-		difficulty: difficulty,
-		dataDir:    dataDir,
-		state:      state,
-		mempool:    transaction.NewMempool(state),
-		blockchain: miner.NewBlockchain(),
+		ctx:            ctx,
+		cancel:         cancel,
+		id:             strings.TrimSpace(id),
+		brokers:        brokers,
+		mine:           mine,
+		difficulty:     difficulty,
+		dataDir:        dataDir,
+		state:          state,
+		mempool:        transaction.NewMempool(state),
+		blockchain:     miner.NewBlockchain(),
+		apiPort:        apiPort,
 	}
 }
 
@@ -86,12 +100,57 @@ func (n *NodeServer) Run() error {
 		return err
 	}
 
+	n.ListenForConfigChanges()
+
 	if n.mine {
 		go n.miningLoop()
 	}
 
+	// === INÍCIO DA API HTTP LOCAL DO NÓ ===
+	mux := http.NewServeMux()
+	mux.HandleFunc("/local-chain", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Content-Type", "application/json")
+
+		type localBlockInfo struct {
+			Hash       string `json:"hash"`
+			ParentHash string `json:"hash_of_previous"`
+			MinerID    string `json:"miner_id"`
+			TxCount    int    `json:"tx_count"`
+			Difficulty int32  `json:"difficulty"`
+			Timestamp  int64  `json:"timestamp"`
+		}
+
+		var localBlocks []localBlockInfo
+
+		for hashHex, node := range n.blockchain.GetAllBlocks() {
+			localBlocks = append(localBlocks, localBlockInfo{
+				Hash:       hashHex,
+				ParentHash: hex.EncodeToString(node.Block.HashOfPrevious),
+				MinerID:    node.Block.Miner,
+				TxCount:    len(node.Block.Transactions),
+				Difficulty: node.Block.Nbits,
+				Timestamp:  node.Block.Timestamp,
+			})
+		}
+
+		json.NewEncoder(w).Encode(localBlocks)
+	})
+
+	server := &http.Server{Addr: fmt.Sprintf(":%d", n.apiPort), Handler: mux}
+	go func() {
+		log.Printf("[%s] API Local iniciada na porta %d", n.id, n.apiPort)
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Printf("[%s] erro na API Local: %v", n.id, err)
+		}
+	}()
+	// === FIM DA API HTTP LOCAL DO NÓ ===
+
 	log.Printf("[%s] node iniciado (mine=%v difficulty=%d brokers=%v)", n.id, n.mine, n.difficulty, n.brokers)
 	<-n.ctx.Done()
+	
+	// Encerra o servidor local graciosamente
+	server.Shutdown(context.Background())
 	return n.shutdown()
 }
 
@@ -217,7 +276,6 @@ func (n *NodeServer) processBlock(block *miner.Block) error {
 	// Se houve reorganização (cadeia ficou maior), processa reorg
 	if newChainLength > oldChainLength {
 		log.Printf("[Consenso] Reorganização detectada - Altura Local: %d, Altura Recebida: %d", oldChainLength, newChainLength)
-		log.Printf("[Consenso] Reorganização detectada - Altura Local: %d, Altura Recebida: %d", oldChainLength, newChainLength)
 		if err := n.handleReorganization(oldBestHash, block.Hash); err != nil {
 			log.Printf("[%s] erro na reorganizacao: %v", n.id, err)
 			// Em caso de erro, tenta reverter para o estado anterior
@@ -266,39 +324,37 @@ func (n *NodeServer) handleReorganization(oldTipHash, newTipHash []byte) error {
 }
 
 func (n *NodeServer) validateBlockTransactions(block *miner.Block) bool {
-	// Para validação de consenso, precisamos de uma chave admin conhecida
-	// Por enquanto, assumimos que qualquer mint é válido (isso pode ser configurado)
-	adminPubKey := "" // TODO: configurar chave admin conhecida
+    adminPubKey := strings.TrimSpace(os.Getenv("ADMIN_PUB"))
 
-	stateCopy := n.state.Clone()
-	for _, tx := range block.Transactions {
-		if err := stateCopy.EnsureAccount(tx.PublKey); err != nil {
-			log.Printf("[%s] falha ao garantir conta de publicador: %v", n.id, err)
-			return false
-		}
-		if err := stateCopy.EnsureAccount(tx.Recipient); err != nil {
-			log.Printf("[%s] falha ao garantir conta de destinatario: %v", n.id, err)
-			return false
-		}
+    stateCopy := n.state.Clone()
+    for _, tx := range block.Transactions {
+        if err := stateCopy.EnsureAccount(tx.PublKey); err != nil {
+            log.Printf("[%s] falha ao garantir conta de publicador: %v", n.id, err)
+            return false
+        }
+        if err := stateCopy.EnsureAccount(tx.Recipient); err != nil {
+            log.Printf("[%s] falha ao garantir conta de destinatario: %v", n.id, err)
+            return false
+        }
 
-		// Validação básica
-		if err := tx.Validate(stateCopy); err != nil {
-			log.Printf("[%s] bloco contem transacao invalida %s: %v", n.id, tx.ID, err)
-			return false
-		}
+        // Validação básica
+        if err := tx.Validate(stateCopy); err != nil {
+            log.Printf("[%s] bloco contem transacao invalida %s: %v", n.id, tx.ID, err)
+            return false
+        }
 
-		// Validação de regras de consenso específicas
-		if err := tx.ValidateConsensusRules(stateCopy, adminPubKey); err != nil {
-			log.Printf("[%s] bloco contem transacao que viola consenso %s: %v", n.id, tx.ID, err)
-			return false
-		}
+        // Validação de regras de consenso específicas usando a chave limpa
+        if err := tx.ValidateConsensusRules(stateCopy, adminPubKey); err != nil {
+            log.Printf("[%s] bloco contem transacao que viola consenso %s: %v", n.id, tx.ID, err)
+            return false
+        }
 
-		if err := tx.Execute(stateCopy); err != nil {
-			log.Printf("[%s] bloco contem transacao invalida %s: %v", n.id, tx.ID, err)
-			return false
-		}
-	}
-	return true
+        if err := tx.Execute(stateCopy); err != nil {
+            log.Printf("[%s] bloco contem transacao invalida %s: %v", n.id, tx.ID, err)
+            return false
+        }
+    }
+    return true
 }
 
 func (n *NodeServer) rebuildStateFromCanonicalChain() error {
@@ -343,7 +399,7 @@ func (n *NodeServer) removeBlockTransactionsFromMempool(block *miner.Block) {
 }
 
 func (n *NodeServer) createGenesisBlock() error {
-	genesis := miner.NewBlock([]byte{}, []transaction.Transaction{}, n.difficulty)
+	genesis := miner.NewBlock([]byte{}, []transaction.Transaction{}, n.difficulty, n.id)
 	genesis.Timestamp = genesisTimestamp
 	genesis.MerkleRootHash = miner.CalculateMerkleRoot(genesis.Transactions)
 	miner.Mine(genesis)
@@ -394,8 +450,19 @@ func (n *NodeServer) miningLoop() {
 			continue
 		}
 
-		block := miner.NewBlock(n.blockchain.GetLatestHash(), txs, n.difficulty)
+		// 1. Prepara o bloco com as transações da fila usando a dificuldade atualizada
+		currentDiff := atomic.LoadInt32(&n.difficulty)
+		block := miner.NewBlock(n.blockchain.GetLatestHash(), txs, currentDiff, n.id)
+		
+		// 2. Inicia o cálculo do Hash (isso leva tempo)
 		miner.Mine(block)
+		
+		if !n.validateBlockTransactions(block) {
+			log.Printf("[%s] bloco descartado (stale): outro no minerou primeiro", n.id)
+			n.mempool.Remove(txIDs)
+			continue 
+		}
+
 		log.Printf("[%s] bloco minerado com hash %x", n.id, block.Hash)
 
 		if err := n.processBlock(block); err != nil {
@@ -405,6 +472,7 @@ func (n *NodeServer) miningLoop() {
 		if err := n.blockTransport.Publish(block); err != nil {
 			log.Printf("[%s] falha ao publicar bloco: %v", n.id, err)
 		}
+		
 		n.mempool.Remove(txIDs)
 	}
 }
@@ -434,4 +502,52 @@ func (n *NodeServer) shutdown() error {
 	}
 	n.cancel()
 	return nil
+}
+// ListenForConfigChanges escuta comandos administrativos globais (como mudança de dificuldade)
+func (n *NodeServer) ListenForConfigChanges() {
+	reader := kafka.NewReader(kafka.ReaderConfig{
+		Brokers:  n.brokers,
+		Topic:    "network-config",
+		// O GroupID único garante que CADA nó receba a sua própria cópia da mensagem (Broadcast)
+		GroupID:  n.id + "-config-group", 
+		MinBytes: 1,
+		MaxBytes: 10e6,
+	})
+
+	log.Printf("[%s] 📡 Escutando mudanças de configuração na rede...", n.id)
+
+	go func() {
+		defer reader.Close()
+		for {
+			if n.ctx.Err() != nil {
+				return // Encerra a goroutine se o nó for desligado
+			}
+
+			msg, err := reader.FetchMessage(n.ctx)
+			if err != nil {
+				continue
+			}
+
+			// Decodifica a mensagem JSON
+			var configData map[string]interface{}
+			if err := json.Unmarshal(msg.Value, &configData); err == nil {
+				
+				// Se for um comando de Dificuldade
+				if configData["type"] == "DIFFICULTY_UPDATE" {
+					// O json.Unmarshal converte números genéricos para float64, precisamos converter de volta para int32
+					if val, ok := configData["value"].(float64); ok {
+						newDiff := int32(val)
+						
+						// Usa atomic para atualizar com segurança (thread-safe) a variável de dificuldade que o minerLoop está a ler
+						atomic.StoreInt32(&n.difficulty, newDiff)
+						
+						log.Printf("[%s] ALERTA DE REDE: Dificuldade atualizada para %d bits!", n.id, newDiff)
+					}
+				}
+			}
+
+			// Confirma ao Kafka que leu a mensagem
+			reader.CommitMessages(n.ctx, msg)
+		}
+	}()
 }

@@ -245,3 +245,10 @@ func (bc *Blockchain) Reorganize(newTipHash []byte) ([]Block, []Block, error) {
 
 	return blocksToDisconnect, blocksToConnect, nil
 }
+
+func (bc *Blockchain) GetAllBlocks() map[string]*BlockNode {
+	bc.mu.RLock()
+	defer bc.mu.RUnlock()
+	
+	return bc.blocks
+}

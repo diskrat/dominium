@@ -33,12 +33,10 @@ go.work.sum
 
 # Project-specific
 logs/
-visualizer
 *.log
 
 # Node.js / npm
 node_modules/
-web/build/
 
 # Environment & Secrets
 .env
