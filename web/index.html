@@ -21,12 +21,19 @@
             <div class="node-selector">
                 <label for="node-url">Selecione o Nó:</label>
                 <select id="node-url">
-                    <option value="/api/node1">Nó 1</option>
-                    <option value="/api/node2">Nó 2</option>
-                    <option value="/api/node3">Nó 3</option>
+                    <option value="http://localhost:8080">Nó 1</option>
+                    <option value="http://localhost:8081">Nó 2</option>
+                    <option value="http://localhost:8082">Nó 3</option>
                 </select>
             </div>
             <button id="refresh-btn" class="btn">Atualizar</button>
+            <button id="simulate-tx-btn" class="btn">+ Gerar 1 Tx</button>
+            <button id="simulate-attack-btn" class="btn btn-danger">Simular Ataque</button>
+            <div class="difficulty-control">
+                <label for="difficulty-slider">Dificuldade:</label>
+                <input id="difficulty-slider" type="range" min="0" max="8" step="1" value="4">
+                <span id="difficulty-value">4</span>
+            </div>
         </div>
 
         <div class="dashboard">
