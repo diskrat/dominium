@@ -44,4 +44,4 @@ package-lock.json
 .env.local
 .env.*.local
 *.pem
-runtime.env
+config/runtime.env
