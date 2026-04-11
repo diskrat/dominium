@@ -1,22 +1,27 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
-set -e
+set -euo pipefail
 
-# 1. Gera a privada P-256
-openssl ecparam -name prime256v1 -genkey -noout -out admin_priv.pem
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DEFAULT_ENV="$ROOT_DIR/config/default.env"
+RUNTIME_ENV="$ROOT_DIR/config/runtime.env"
 
-# 2. Gera a pública
-openssl ec -in admin_priv.pem -pubout -out admin_pub.pem
+PRIVATE_PEM="$(openssl ecparam -name prime256v1 -genkey -noout)"
+PRIV_HEX="$(printf '%s\n' "$PRIVATE_PEM" | openssl ec -outform DER | xxd -p | tr -d '\n')"
+PUB_HEX="$(printf '%s\n' "$PRIVATE_PEM" | openssl ec -pubout -outform DER | xxd -p | tr -d '\n')"
 
-# 3. Converte para HEX SEM QUEBRAS DE LINHA (tr -d '\n')
-PRIV_HEX=$(openssl ec -in admin_priv.pem -outform DER | xxd -p | tr -d '\n')
-PUB_HEX=$(openssl ec -in admin_pub.pem -pubin -outform DER | xxd -p | tr -d '\n')
+mkdir -p "$ROOT_DIR/config"
 
-mkdir -p config
-cat > config/runtime.env <<EOF
+if [[ ! -f "$DEFAULT_ENV" ]]; then
+	cat > "$DEFAULT_ENV" <<EOF
 DIFFICULTY=16
-ADMIN_KEY=$PRIV_HEX
-ADMIN_PUB=$PUB_HEX
 EOF
+fi
 
-echo "Arquivo de configuracao gerado em config/runtime.env"
+{
+	grep -vE '^(ADMIN_KEY|ADMIN_PUB)=' "$DEFAULT_ENV"
+	printf 'ADMIN_KEY=%s\n' "$PRIV_HEX"
+	printf 'ADMIN_PUB=%s\n' "$PUB_HEX"
+} > "$RUNTIME_ENV"
+
+echo "Arquivo gerado em config/runtime.env a partir de config/default.env"
