@@ -130,7 +130,7 @@ func (vs *VisualizerServer) collectNetworkState() NetworkState {
 
 	clusterNodes := []string{"node-1", "node-2", "node-3"}
 	nodes := make([]NodeState, len(clusterNodes))
-	
+
 	for i, nodeID := range clusterNodes {
 		// Calcula a porta do nó (node-1 -> 8082, node-2 -> 8083, etc.)
 		port := 8081 + (i + 1)
@@ -290,7 +290,7 @@ func main() {
 	http.HandleFunc("/api/race-attack", visualizer.handleRaceAttack)
 
 	// Serve static files
-	fs := http.FileServer(http.Dir("./web/build"))
+	fs := http.FileServer(http.Dir("./web/dist"))
 	http.Handle("/", fs)
 
 	fmt.Println("🚀 Dominium Visualizer Server starting on :8080")

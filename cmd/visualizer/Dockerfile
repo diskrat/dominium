@@ -23,7 +23,7 @@ WORKDIR /root/
 COPY --from=builder /app/visualizer .
 
 # Copy web build files
-COPY --from=builder /app/web/build ./web/build
+COPY --from=builder /app/web/dist ./web/dist
 
 EXPOSE 8080
 

@@ -1,12 +1,48 @@
-// src/services/dominiumApi.js
-const API_BASE_URL = "http://localhost:8085";
+const API_BASE_URL =
+    (typeof import.meta !== "undefined" && import.meta.env?.VITE_API_URL) ||
+    (typeof process !== "undefined" && process.env?.REACT_APP_API_URL) ||
+    "http://localhost:8085";
+
+const WS_BASE_URL =
+    (typeof import.meta !== "undefined" && import.meta.env?.VITE_WS_URL) ||
+    (typeof process !== "undefined" && process.env?.REACT_APP_WS_URL) ||
+    "ws://localhost:8080";
+
+const request = async (path, options = {}) => {
+    const response = await fetch(`${API_BASE_URL}${path}`, options);
+    if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || `Falha na chamada ${path}`);
+    }
+    return response;
+};
+
+export const connectNetworkWebSocket = () => new WebSocket(`${WS_BASE_URL}/ws`);
+
+export const updateDifficulty = async (difficulty) => {
+    await request("/network/difficulty", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ difficulty }),
+    });
+};
+
+export const generateWallet = async () => {
+    const response = await request("/wallet/generate");
+    return response.json();
+};
+
+export const triggerDoubleSpend = async () => {
+    const response = await request("/attacks/double-spend", { method: "POST" });
+    return response.json();
+};
+
 export const executeChaosMint = async (count = 10) => {
-    console.log(`Iniciando Chaos Mint com ${count} transações...`);
     let successCount = 0;
 
     for (let i = 0; i < count; i++) {
         try {
-            const response = await fetch(`${API_BASE_URL}/transactions`, {
+            await request("/transactions", {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json",
@@ -17,16 +53,11 @@ export const executeChaosMint = async (count = 10) => {
                     nft_id: `nft_caos_${Date.now()}_${i}`,
                 }),
             });
-
-            if (response.ok) {
-                successCount++;
-            } else {
-                console.error(`Erro na transação ${i + 1}`);
-            }
+            successCount++;
         } catch (error) {
             console.error("Falha ao comunicar com a API Gateway:", error);
         }
     }
 
-    return successCount; // Retorna quantas deram certo para a UI saber
+    return successCount;
 };

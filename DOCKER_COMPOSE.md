@@ -108,10 +108,10 @@ docker-compose stats
 ### Variáveis de Ambiente (`.env`)
 
 ```
-ADMIN_PRIVATE_KEY=...     # Chave privada do admin (para mint de NFTs)
-ADMIN_PUBLIC_KEY=...      # Chave pública do admin
+ADMIN_KEY=...             # Chave privada do admin (para mint de NFTs)
+ADMIN_PUB=...             # Chave pública do admin
 KAFKA_BROKERS=kafka:9092  # Brokers Kafka (não mude)
-NETWORK_DIFFICULTY=4      # Dificuldade PoW (4, 8, 16...)
+DIFFICULTY=4              # Dificuldade PoW (4, 8, 16...)
 ```
 
 ---

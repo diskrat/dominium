@@ -16,8 +16,8 @@ docker-compose up -d
 
 As chaves admin são definidas automaticamente no arquivo `.env`:
 
-- `ADMIN_PRIVATE_KEY` - Para assinar transações de mint
-- `ADMIN_PUBLIC_KEY` - Chave pública correspondente
+- `ADMIN_KEY` - Para assinar transações de mint
+- `ADMIN_PUB` - Chave pública correspondente
 
 **Não é necessário gerar chaves manualmente!**
 

@@ -13,7 +13,7 @@ services:
         networks:
             - dominium-network
         healthcheck:
-            test: ["CMD", "nc", "-z", "localhost", "2181"]
+            test: [ "CMD", "nc", "-z", "localhost", "2181" ]
             interval: 10s
             timeout: 5s
             retries: 5
@@ -38,7 +38,7 @@ services:
         networks:
             - dominium-network
         healthcheck:
-            test: ["CMD-SHELL", "nc -z localhost 9092 || exit 1"]
+            test: [ "CMD-SHELL", "nc -z localhost 9092 || exit 1" ]
             interval: 5s
             timeout: 10s
             retries: 15
@@ -48,8 +48,10 @@ services:
     node-1:
         build:
             context: .
-            dockerfile: Dockerfile.node
+            dockerfile: cmd/node/Dockerfile
         container_name: dominium-node-1
+        env_file:
+            - ./config/runtime.env
         depends_on:
             kafka:
                 condition: service_healthy
@@ -59,8 +61,6 @@ services:
             NODE_ID: node-1
             P2P_BROKERS: kafka:9092
             MINE: "true"
-            DIFFICULTY: "${DIFFICULTY}"
-            ADMIN_PUB: "${ADMIN_PUBLIC_KEY}"
         volumes:
             - ./logs:/app/logs
         networks:
@@ -69,25 +69,19 @@ services:
     node-2:
         build:
             context: .
-            dockerfile: Dockerfile.node
+            dockerfile: cmd/node/Dockerfile
         container_name: dominium-node-2
+        env_file:
+            - ./config/runtime.env
         depends_on:
-            kafka:
+            node-1:
                 condition: service_healthy
         ports:
             - "8083:8083"
-        entrypoint:
-            [
-                "sh",
-                "-c",
-                "sleep 20 && ./node -id node-2 -mine true -p2p kafka:9092",
-            ]
         environment:
             NODE_ID: node-2
             P2P_BROKERS: kafka:9092
             MINE: "true"
-            DIFFICULTY: "${DIFFICULTY}"
-            ADMIN_PUB: "${ADMIN_PUBLIC_KEY}"
         volumes:
             - ./logs:/app/logs
         networks:
@@ -96,20 +90,19 @@ services:
     node-3:
         build:
             context: .
-            dockerfile: Dockerfile.node
+            dockerfile: cmd/node/Dockerfile
         container_name: dominium-node-3
+        env_file:
+            - ./config/runtime.env
         depends_on:
-            kafka:
+            node-1:
                 condition: service_healthy
         ports:
             - "8084:8084"
-        command: sh -c "sleep 40 && ./node -id node-3 -mine true -p2p kafka:9092"
         environment:
             NODE_ID: node-3
             P2P_BROKERS: kafka:9092
             MINE: "true"
-            DIFFICULTY: "${DIFFICULTY}"
-            ADMIN_PUB: "${ADMIN_PUBLIC_KEY}"
         volumes:
             - ./logs:/app/logs
         networks:
@@ -119,21 +112,19 @@ services:
     api-gateway:
         build:
             context: .
-            dockerfile: Dockerfile.api
+            dockerfile: cmd/api/Dockerfile
         container_name: dominium-api-gateway
+        env_file:
+            - ./config/runtime.env
         depends_on:
             kafka:
                 condition: service_healthy
-            node-1:
-                condition: service_started
         ports:
             - "8085:8085"
         environment:
             API_PORT: "8085"
             API_ID: "api-gateway"
             P2P_BROKERS: "kafka:9092"
-            ADMIN_KEY: "${ADMIN_PRIVATE_KEY}"
-            ADMIN_PUB: "${ADMIN_PUBLIC_KEY}"
         volumes:
             - ./logs:/app/logs
         networks:
@@ -143,7 +134,7 @@ services:
     visualizer:
         build:
             context: .
-            dockerfile: Dockerfile.visualizer
+            dockerfile: cmd/visualizer/Dockerfile
         container_name: dominium-visualizer
         depends_on:
             api-gateway:

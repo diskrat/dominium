@@ -427,6 +427,7 @@ func (g *Gateway) handleGetNetworkStatus(w http.ResponseWriter, r *http.Request)
 
 	// 1. Coleta a Corrente Canônica (A linha principal/vencedora)
 	chain := g.blockchain.GetCanonicalChain()
+	allNodesSnapshot := g.blockchain.GetAllBlocks()
 	canonicalChain := make([]BlockMetadata, 0, len(chain))
 	canonicalMap := make(map[string]uint64) // MAPA MODIFICADO: Guarda a Altura (Height)
 
@@ -452,6 +453,12 @@ func (g *Gateway) handleGetNetworkStatus(w http.ResponseWriter, r *http.Request)
 	allBlocks := make([]BlockMetadata, 0, len(g.blockMetadata))
 	for _, meta := range g.blockMetadata {
 		metaCopy := *meta
+
+		// Aplica altura real da árvore para todos os blocos (inclusive forks)
+		if node, ok := allNodesSnapshot[metaCopy.Hash]; ok {
+			metaCopy.Height = node.Height
+		}
+
 		// Se o bloco faz parte da corrente principal, aplica a altura correta que mapeamos acima
 		if height, ok := canonicalMap[metaCopy.Hash]; ok {
 			metaCopy.Height = height

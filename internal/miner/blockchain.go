@@ -158,6 +158,14 @@ func (bc *Blockchain) GetBlockByHash(hash []byte) (*Block, bool) {
 
 // FindCommonAncestor encontra o ancestral comum entre duas cadeias.
 func (bc *Blockchain) FindCommonAncestor(hash1, hash2 []byte) ([]byte, error) {
+	bc.mu.RLock()
+	defer bc.mu.RUnlock()
+
+	return bc.findCommonAncestorNoLock(hash1, hash2)
+}
+
+// findCommonAncestorNoLock encontra o ancestral comum assumindo que o lock ja foi adquirido.
+func (bc *Blockchain) findCommonAncestorNoLock(hash1, hash2 []byte) ([]byte, error) {
 	hash1Hex := hex.EncodeToString(hash1)
 	hash2Hex := hex.EncodeToString(hash2)
 
@@ -204,7 +212,7 @@ func (bc *Blockchain) Reorganize(newTipHash []byte) ([]Block, []Block, error) {
 	}
 
 	// Encontra o ancestral comum
-	commonAncestorHash, err := bc.FindCommonAncestor(bc.bestChain.Block.Hash, newTipHash)
+	commonAncestorHash, err := bc.findCommonAncestorNoLock(bc.bestChain.Block.Hash, newTipHash)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -246,9 +254,20 @@ func (bc *Blockchain) Reorganize(newTipHash []byte) ([]Block, []Block, error) {
 	return blocksToDisconnect, blocksToConnect, nil
 }
 
-func (bc *Blockchain) GetAllBlocks() map[string]*BlockNode {
+func (bc *Blockchain) GetAllBlocks() map[string]BlockNode {
 	bc.mu.RLock()
 	defer bc.mu.RUnlock()
-	
-	return bc.blocks
+
+	snapshot := make(map[string]BlockNode, len(bc.blocks))
+	for hashHex, node := range bc.blocks {
+		if node == nil {
+			continue
+		}
+		snapshot[hashHex] = BlockNode{
+			Block:  node.Block,
+			Height: node.Height,
+		}
+	}
+
+	return snapshot
 }

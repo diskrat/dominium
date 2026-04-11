@@ -35,4 +35,4 @@ HEALTHCHECK --interval=10s --timeout=5s --start-period=5s --retries=3 \
     CMD test -e /app/node || exit 1
 
 # Run the node
-CMD ./node -id=${NODE_ID} -p2p=${P2P_BROKERS} -mine=${MINE} 
+CMD ./node -id=${NODE_ID} -p2p=${P2P_BROKERS} -mine=${MINE}

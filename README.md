@@ -133,8 +133,8 @@ go run ./cmd/node -id node-3 -p2p localhost:9092 -mine -difficulty 4
 ```bash
 # Terminal 4: API Gateway
 go run ./cmd/api -port 8085 -id api-gateway -p2p localhost:9092 \
-  -admin-key $(grep ADMIN_PRIVATE_KEY .env | cut -d'=' -f2) \
-  -admin-pub $(grep ADMIN_PUBLIC_KEY .env | cut -d'=' -f2)
+  -admin-key $(grep ADMIN_KEY .env | cut -d'=' -f2) \
+  -admin-pub $(grep ADMIN_PUB .env | cut -d'=' -f2)
 ```
 
 #### 4. Executar Visualizer
@@ -166,15 +166,15 @@ go run ./cmd/node -id node-1 -p2p localhost:9092 -mine -difficulty 4
 go run ./cmd/node -id node-2 -p2p localhost:9092 -mine -difficulty 4
 go run ./cmd/node -id node-3 -p2p localhost:9092 -mine -difficulty 4
 go run ./cmd/api -port 8085 -id api-gateway -p2p localhost:9092 \
-  -admin-key $(grep ADMIN_PRIVATE_KEY .env | cut -d'=' -f2) \
-  -admin-pub $(grep ADMIN_PUBLIC_KEY .env | cut -d'=' -f2)
+  -admin-key $(grep ADMIN_KEY .env | cut -d'=' -f2) \
+  -admin-pub $(grep ADMIN_PUB .env | cut -d'=' -f2)
 ```
 
 ### Teste de Dificuldade (Demonstração de 20% da Nota)
 
 ```bash
 # Com Docker Compose - alterar dificuldade no .env
-echo "NETWORK_DIFFICULTY=8" >> .env
+echo "DIFFICULTY=8" >> .env
 docker-compose up -d
 
 # Ou manual:
