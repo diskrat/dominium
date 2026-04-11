@@ -45,3 +45,8 @@ package-lock.json
 .env.*.local
 *.pem
 config/runtime.env
+
+# Build outputs
+# Vite production build (static site)
+/web/dist
+/dist
