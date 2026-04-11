@@ -9,9 +9,12 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"dominium/internal/api"
 	"dominium/internal/transaction"
+
+	"github.com/segmentio/kafka-go"
 )
 
 func main() {
@@ -45,18 +48,35 @@ func main() {
 	}
 
 	brokers := strings.Split(brokerStr, ",")
-	gateway := api.NewGateway(ctx, *id, *port, brokers)
+	for {
+		if kafkaOnline(brokers) {
+			break
+		}
+		log.Printf("[startup] Aguardando Kafka (%s) ficar online...", brokerStr)
+		time.Sleep(2 * time.Second)
+	}
 
+	gateway := api.NewGateway(ctx, *id, *port, brokers)
 	if err := gateway.SetAdminIdentity(adminIdentity); err != nil {
 		fmt.Fprintf(os.Stderr, "erro ao configurar admin: %v\n", err)
 		os.Exit(1)
 	}
 
 	log.Printf("API Gateway iniciando (id=%s port=%d brokers=%v)", *id, *port, brokers)
-
-	// Inicia o gateway
 	if err := gateway.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "erro ao iniciar gateway: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// kafkaOnline faz um healthcheck simples tentando conectar no broker
+func kafkaOnline(brokers []string) bool {
+	for _, addr := range brokers {
+		conn, err := kafka.Dial("tcp", addr)
+		if err == nil {
+			conn.Close()
+			return true
+		}
+	}
+	return false
 }

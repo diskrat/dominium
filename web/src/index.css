@@ -91,3 +91,37 @@
         background-color: transparent;
     }
 }
+
+/* Number input spinner styling for dark theme */
+input[type="number"] {
+    color: hsl(var(--foreground));
+    background-color: transparent;
+}
+
+/* WebKit-based browsers: keep native spinner but style its background/opacity so it fits the dark theme */
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+    -webkit-appearance: inner-spin-button;
+    appearance: inner-spin-button;
+    margin: 0;
+    background: transparent;
+    opacity: 0.9;
+}
+
+/* Slightly reduce default padding so spinner sits close to the right edge */
+input[type="number"] {
+    padding-right: 0.5rem;
+}
+
+/* Firefox: leave native spinner enabled (don't force textfield appearance) so arrows remain visible */
+
+/* Hide native spinner for specific inputs that use custom icon controls */
+.hide-native-spinner::-webkit-outer-spin-button,
+.hide-native-spinner::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+
+.hide-native-spinner[type="number"] {
+    -moz-appearance: textfield;
+}

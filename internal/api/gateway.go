@@ -23,20 +23,12 @@ import (
 // BlockMetadata armazena informações sobre um bloco para exibição.
 type BlockMetadata struct {
 	Hash       string `json:"hash"`
-	ParentHash     string `json:"hash_of_previous"`
+	ParentHash string `json:"hash_of_previous"`
 	MinerID    string `json:"miner_id"`
 	Height     uint64 `json:"height"`
 	TxCount    int    `json:"tx_count"`
 	Timestamp  int64  `json:"timestamp"`
 	Difficulty int32  `json:"difficulty"`
-}
-
-// NetworkStatus representa o estado da rede Dominium.
-type NetworkStatus struct {
-	NetworkHeight  int             `json:"network_height"`
-	NodesActive    []string        `json:"nodes_active"`
-	CanonicalChain []BlockMetadata `json:"canonical_chain"`
-	Timestamp      int64           `json:"timestamp"`
 }
 
 // TransactionRequest é o payload de entrada para POST /transactions.
@@ -53,8 +45,25 @@ type TransactionResponse struct {
 	Status string `json:"status"`
 	Error  string `json:"error,omitempty"`
 }
-type DifficultyRequest struct {
-	Difficulty int32 `json:"difficulty"`
+
+type accountResp struct {
+	PublicKey string   `json:"publicKey"`
+	NFTs      []string `json:"nfts"`
+}
+
+type networkStatusResponse struct {
+	NetworkHeight    int                        `json:"network_height"`
+	NodesActive      []string                   `json:"nodes_active"`
+	CanonicalChain   []BlockMetadata            `json:"canonical_chain"`
+	AllBlocks        []BlockMetadata            `json:"all_blocks"`
+	Accounts         []accountResp              `json:"accounts"`
+	Mempool          []*transaction.Transaction `json:"mempool"`
+	CanonicalTxCount int                        `json:"canonical_tx_count"`
+	AllBlocksTxCount int                        `json:"all_blocks_tx_count"`
+	OrphanTxCount    int                        `json:"orphan_tx_count"`
+	DiscardedTxCount int                        `json:"discarded_tx_count"`
+	MempoolTxCount   int                        `json:"mempool_tx_count"`
+	Timestamp        int64                      `json:"timestamp"`
 }
 
 type Gateway struct {
@@ -69,10 +78,10 @@ type Gateway struct {
 	generator        *transaction.Generator
 	state            *transaction.AccountState
 	blockchain       *miner.Blockchain
-	blockMetadata    map[string]*BlockMetadata
-	activeNodes      map[string]bool
 	mempool          map[string]*transaction.Transaction
-	mu               sync.RWMutex
+	stateMu          sync.RWMutex
+	metaMu           sync.RWMutex
+	genMu            sync.Mutex
 	networkSyncReady bool
 	adminPubKey      string
 }
@@ -88,17 +97,15 @@ func NewGateway(parent context.Context, id string, port int, brokers []string) *
 	state := transaction.NewAccountState()
 
 	return &Gateway{
-		ctx:           ctx,
-		cancel:        cancel,
-		id:            strings.TrimSpace(id),
-		port:          port,
-		brokers:       brokers,
-		generator:     gen,
-		state:         state,
-		blockchain:    miner.NewBlockchain(),
-		blockMetadata: make(map[string]*BlockMetadata),
-		activeNodes:   make(map[string]bool),
-		mempool:       make(map[string]*transaction.Transaction),
+		ctx:        ctx,
+		cancel:     cancel,
+		id:         strings.TrimSpace(id),
+		port:       port,
+		brokers:    brokers,
+		generator:  gen,
+		state:      state,
+		blockchain: miner.NewBlockchain(),
+		mempool:    make(map[string]*transaction.Transaction),
 	}
 }
 
@@ -108,6 +115,8 @@ func (g *Gateway) SetAdminIdentity(identity *transaction.WalletIdentity) error {
 		return errors.New("identidade admin nula")
 	}
 	g.adminPubKey = identity.PublicKey
+	g.genMu.Lock()
+	defer g.genMu.Unlock()
 	return g.generator.SetAdmin(identity)
 }
 
@@ -210,7 +219,7 @@ func (g *Gateway) syncBlockchainHistory() error {
 			continue
 		}
 
-		if err := g.processBlock(&block, m.Key); err != nil {
+		if err := g.processBlock(&block); err != nil {
 			log.Printf("[%s] falha ao processar bloco durante sync: %v", g.id, err)
 		}
 		blockCount++
@@ -220,9 +229,9 @@ func (g *Gateway) syncBlockchainHistory() error {
 		}
 	}
 
-	g.mu.Lock()
+	g.metaMu.Lock()
 	g.networkSyncReady = true
-	g.mu.Unlock()
+	g.metaMu.Unlock()
 
 	log.Printf("[%s] sincronizacao concluida com %d blocos", g.id, blockCount)
 	return nil
@@ -230,75 +239,204 @@ func (g *Gateway) syncBlockchainHistory() error {
 
 func (g *Gateway) subscribeBlocks() error {
 	return g.blockTransport.Subscribe(func(block *miner.Block) error {
-		return g.processBlock(block, nil)
+		return g.processBlock(block)
 	})
 }
 
-func (g *Gateway) processBlock(block *miner.Block, minerKeyBytes []byte) error {
+func (g *Gateway) processBlock(block *miner.Block) error {
 	if block == nil {
 		return errors.New("bloco nulo")
 	}
 
-	// 1. CAPTURA O NOME DO MINERADOR DIRETO DO BLOCO
-	minerID := block.Miner
-	
-	// Fallback de segurança caso a string venha vazia
-	if minerID == "" && minerKeyBytes != nil {
-		minerID = string(minerKeyBytes)
-	}
-
 	// Adiciona o bloco à blockchain
-	if err := g.blockchain.AddBlock(*block); err != nil {
-		if strings.Contains(err.Error(), "ja existe") {
+	result, err := g.blockchain.AddBlock(*block)
+	if err != nil {
+		if errors.Is(err, miner.ErrDuplicateBlock) {
 			return nil
 		}
+		if !errors.Is(err, miner.ErrOrphanBlock) {
+			return err
+		}
+	}
+
+	if err != nil || !result.TipUpdated {
+		return nil
+	}
+
+	if err := g.rebuildStateFromCanonicalChain(); err != nil {
 		return err
 	}
 
-	g.mu.Lock()
-	defer g.mu.Unlock()
+	return nil
+}
 
-	hashHex := hex.EncodeToString(block.Hash)
-	prevHashHex := hex.EncodeToString(block.HashOfPrevious) // 2. CAPTURA O HASH DO PAI
+func (g *Gateway) rebuildStateFromCanonicalChain() error {
+	chain := g.blockchain.GetCanonicalChain()
+	state := transaction.NewAccountState()
+	chainTxs := make(map[string]bool)
 
-	// 3. SALVA TODOS OS METADADOS INCLUINDO PAI E ALTURA ZERO (Que será ajustada no GET)
-	g.blockMetadata[hashHex] = &BlockMetadata{
+	for _, block := range chain {
+		for _, tx := range block.Transactions {
+			chainTxs[tx.ID] = true
+			if err := state.EnsureAccount(tx.PublKey); err != nil {
+				return err
+			}
+			if err := state.EnsureAccount(tx.Recipient); err != nil {
+				return err
+			}
+			if err := tx.Execute(state); err != nil {
+				return err
+			}
+		}
+	}
+
+	g.stateMu.RLock()
+	pending := make(map[string]*transaction.Transaction, len(g.mempool))
+	for id, tx := range g.mempool {
+		pending[id] = tx
+	}
+	g.stateMu.RUnlock()
+
+	newMempool := make(map[string]*transaction.Transaction)
+	for id, tx := range pending {
+		if chainTxs[id] {
+			continue
+		}
+		if err := state.EnsureAccount(tx.PublKey); err != nil {
+			continue
+		}
+		if err := state.EnsureAccount(tx.Recipient); err != nil {
+			continue
+		}
+		if err := tx.Validate(state); err != nil {
+			continue
+		}
+		if err := tx.ValidateConsensusRules(state, g.adminPubKey); err != nil {
+			continue
+		}
+		newMempool[id] = tx
+	}
+
+	g.stateMu.Lock()
+	g.state = state
+	g.mempool = newMempool
+	g.stateMu.Unlock()
+
+	return nil
+}
+
+func (g *Gateway) snapshotAccounts() []accountResp {
+	g.stateMu.RLock()
+	allAccounts := g.state.GetAllAccounts()
+	accountsResponse := make([]accountResp, 0, len(allAccounts))
+	for pubKey, data := range allAccounts {
+		accountsResponse = append(accountsResponse, accountResp{
+			PublicKey: pubKey,
+			NFTs:      data.GetNFTsList(),
+		})
+	}
+	g.stateMu.RUnlock()
+
+	sort.Slice(accountsResponse, func(i, j int) bool {
+		return accountsResponse[i].PublicKey < accountsResponse[j].PublicKey
+	})
+	return accountsResponse
+}
+
+func (g *Gateway) snapshotMempool() []*transaction.Transaction {
+	g.stateMu.RLock()
+	mempoolResponse := make([]*transaction.Transaction, 0, len(g.mempool))
+	for _, tx := range g.mempool {
+		mempoolResponse = append(mempoolResponse, tx)
+	}
+	g.stateMu.RUnlock()
+
+	sort.Slice(mempoolResponse, func(i, j int) bool {
+		return mempoolResponse[i].Timestamp > mempoolResponse[j].Timestamp
+	})
+	return mempoolResponse
+}
+
+func buildBlockMetadata(hashHex string, block miner.Block, height uint64) BlockMetadata {
+	return BlockMetadata{
 		Hash:       hashHex,
-		ParentHash: prevHashHex, 
-		MinerID:    minerID,
+		ParentHash: hex.EncodeToString(block.HashOfPrevious),
+		MinerID:    block.Miner,
+		Height:     height,
 		TxCount:    len(block.Transactions),
 		Timestamp:  block.Timestamp,
 		Difficulty: block.Nbits,
-		Height:     0, 
+	}
+}
+
+func (g *Gateway) buildNetworkStatus() networkStatusResponse {
+	chain := g.blockchain.GetCanonicalChain()
+	allNodesSnapshot := g.blockchain.GetAllBlocks()
+	orphansSnapshot := g.blockchain.GetOrphansSnapshot()
+	discardedSnapshot := g.blockchain.GetDiscardedSnapshot()
+
+	canonicalChain := make([]BlockMetadata, 0, len(chain))
+	canonicalTxCount := 0
+	for _, block := range chain {
+		hashHex := hex.EncodeToString(block.Hash)
+		height := uint64(0)
+		if node, ok := allNodesSnapshot[hashHex]; ok {
+			height = node.Height
+		}
+		canonicalTxCount += len(block.Transactions)
+		canonicalChain = append(canonicalChain, buildBlockMetadata(hashHex, block, height))
 	}
 
-	if minerID != "" {
-		g.activeNodes[minerID] = true
+	allBlocks := make([]BlockMetadata, 0, len(allNodesSnapshot)+len(orphansSnapshot)+len(discardedSnapshot))
+	allBlocksTxCount := 0
+	orphanTxCount := 0
+	discardedTxCount := 0
+	for hashHex, node := range allNodesSnapshot {
+		block := node.Block
+		allBlocksTxCount += len(block.Transactions)
+		allBlocks = append(allBlocks, buildBlockMetadata(hashHex, block, node.Height))
+	}
+	for hashHex, block := range orphansSnapshot {
+		orphanTxCount += len(block.Transactions)
+		allBlocks = append(allBlocks, buildBlockMetadata(hashHex, block, 0))
+	}
+	for hashHex, block := range discardedSnapshot {
+		discardedTxCount += len(block.Transactions)
+		allBlocks = append(allBlocks, buildBlockMetadata(hashHex, block, 0))
 	}
 
-	// Atualiza AccountState e LIMPA Mempool
-	for _, tx := range block.Transactions {
-		// Remove da mempool local pois já foi confirmada em um bloco
-		delete(g.mempool, tx.ID)
+	sort.Slice(allBlocks, func(i, j int) bool {
+		return allBlocks[i].Timestamp < allBlocks[j].Timestamp
+	})
 
-		if err := g.state.EnsureAccount(tx.PublKey); err != nil {
-			log.Printf("[%s] erro ao garantir conta: %v", g.id, err)
-		}
-		if err := g.state.EnsureAccount(tx.Recipient); err != nil {
-			log.Printf("[%s] erro ao garantir recipient: %v", g.id, err)
-		}
-
-		if err := tx.ValidateConsensusRules(g.state, g.adminPubKey); err != nil {
-			log.Printf("[%s] bloco contem transacao que viola consenso: %v", g.id, err)
-			continue
-		}
-
-		if err := tx.Execute(g.state); err != nil {
-			log.Printf("[%s] erro ao executar transacao: %v", g.id, err)
+	activeNodeSet := make(map[string]bool)
+	for _, meta := range allBlocks {
+		if meta.MinerID != "" {
+			activeNodeSet[meta.MinerID] = true
 		}
 	}
+	activeNodes := make([]string, 0, len(activeNodeSet))
+	for node := range activeNodeSet {
+		activeNodes = append(activeNodes, node)
+	}
 
-	return nil
+	accountsResponse := g.snapshotAccounts()
+	mempoolResponse := g.snapshotMempool()
+
+	return networkStatusResponse{
+		NetworkHeight:    len(chain),
+		NodesActive:      activeNodes,
+		CanonicalChain:   canonicalChain,
+		AllBlocks:        allBlocks,
+		Accounts:         accountsResponse,
+		Mempool:          mempoolResponse,
+		CanonicalTxCount: canonicalTxCount,
+		AllBlocksTxCount: allBlocksTxCount,
+		OrphanTxCount:    orphanTxCount,
+		DiscardedTxCount: discardedTxCount,
+		MempoolTxCount:   len(mempoolResponse),
+		Timestamp:        time.Now().UnixNano(),
+	}
 }
 
 func (g *Gateway) handlePostTransaction(w http.ResponseWriter, r *http.Request) {
@@ -307,9 +445,9 @@ func (g *Gateway) handlePostTransaction(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	g.mu.RLock()
+	g.metaMu.RLock()
 	syncReady := g.networkSyncReady
-	g.mu.RUnlock()
+	g.metaMu.RUnlock()
 
 	if !syncReady {
 		resp := TransactionResponse{Error: "rede ainda nao sincronizada"}
@@ -341,7 +479,9 @@ func (g *Gateway) handlePostTransaction(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		recIdentity := &transaction.WalletIdentity{PublicKey: req.Recipient}
+		g.genMu.Lock()
 		tx, err = g.generator.MintTx(recIdentity, req.NFTID)
+		g.genMu.Unlock()
 	case "transfer":
 		if req.Sender == "" || req.Recipient == "" || req.NFTID == "" {
 			resp := TransactionResponse{Error: "sender, recipient e nft_id obrigatorios para transfer"}
@@ -352,7 +492,9 @@ func (g *Gateway) handlePostTransaction(w http.ResponseWriter, r *http.Request) 
 		}
 		senderIdentity := &transaction.WalletIdentity{PublicKey: req.Sender}
 		recipientIdentity := &transaction.WalletIdentity{PublicKey: req.Recipient}
+		g.genMu.Lock()
 		tx, err = g.generator.TransferTx(senderIdentity, recipientIdentity, req.NFTID)
+		g.genMu.Unlock()
 	default:
 		resp := TransactionResponse{Error: "tipo de transacao invalido: mint ou transfer"}
 		w.Header().Set("Content-Type", "application/json")
@@ -377,7 +519,9 @@ func (g *Gateway) handlePostTransaction(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	g.stateMu.RLock()
 	if err := tx.Validate(g.state); err != nil {
+		g.stateMu.RUnlock()
 		resp := TransactionResponse{TxID: tx.ID, Error: fmt.Sprintf("validacao falhou: %v", err)}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
@@ -386,12 +530,14 @@ func (g *Gateway) handlePostTransaction(w http.ResponseWriter, r *http.Request) 
 	}
 
 	if err := tx.ValidateConsensusRules(g.state, g.adminPubKey); err != nil {
+		g.stateMu.RUnlock()
 		resp := TransactionResponse{TxID: tx.ID, Error: fmt.Sprintf("consenso violado: %v", err)}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
 		json.NewEncoder(w).Encode(resp)
 		return
 	}
+	g.stateMu.RUnlock()
 
 	// Publica no Kafka
 	if err := g.txTransport.Publish(tx); err != nil {
@@ -403,9 +549,9 @@ func (g *Gateway) handlePostTransaction(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// === NOVIDADE: Adiciona na mempool local para o Visualizer ver ===
-	g.mu.Lock()
+	g.stateMu.Lock()
 	g.mempool[tx.ID] = tx
-	g.mu.Unlock()
+	g.stateMu.Unlock()
 
 	resp := TransactionResponse{
 		TxID:   tx.ID,
@@ -422,105 +568,7 @@ func (g *Gateway) handleGetNetworkStatus(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	g.mu.RLock()
-	defer g.mu.RUnlock()
-
-	// 1. Coleta a Corrente Canônica (A linha principal/vencedora)
-	chain := g.blockchain.GetCanonicalChain()
-	allNodesSnapshot := g.blockchain.GetAllBlocks()
-	canonicalChain := make([]BlockMetadata, 0, len(chain))
-	canonicalMap := make(map[string]uint64) // MAPA MODIFICADO: Guarda a Altura (Height)
-
-	for i, block := range chain {
-		hashHex := hex.EncodeToString(block.Hash)
-		canonicalMap[hashHex] = uint64(i) // Mapeia o Hash para a sua Altura Oficial
-
-		metadata := BlockMetadata{
-			Hash:       hashHex,
-			ParentHash: hex.EncodeToString(block.HashOfPrevious), // Captura o Pai na Canonical
-			Height:     uint64(i),
-			TxCount:    len(block.Transactions),
-			Timestamp:  block.Timestamp,
-			Difficulty: block.Nbits,
-		}
-		if stored, ok := g.blockMetadata[hashHex]; ok {
-			metadata.MinerID = stored.MinerID
-		}
-		canonicalChain = append(canonicalChain, metadata)
-	}
-
-	// 2. Coleta TODOS os blocos (Incluindo Forks/Orfãos)
-	allBlocks := make([]BlockMetadata, 0, len(g.blockMetadata))
-	for _, meta := range g.blockMetadata {
-		metaCopy := *meta
-
-		// Aplica altura real da árvore para todos os blocos (inclusive forks)
-		if node, ok := allNodesSnapshot[metaCopy.Hash]; ok {
-			metaCopy.Height = node.Height
-		}
-
-		// Se o bloco faz parte da corrente principal, aplica a altura correta que mapeamos acima
-		if height, ok := canonicalMap[metaCopy.Hash]; ok {
-			metaCopy.Height = height
-		}
-		allBlocks = append(allBlocks, metaCopy)
-	}
-
-	// CRÍTICO PARA O REACT: Ordena todos os blocos cronologicamente
-	sort.Slice(allBlocks, func(i, j int) bool {
-		return allBlocks[i].Timestamp < allBlocks[j].Timestamp
-	})
-
-	// 3. Prepara Nós Ativos
-	activeNodes := make([]string, 0, len(g.activeNodes))
-	for node := range g.activeNodes {
-		activeNodes = append(activeNodes, node)
-	}
-
-	// 4. Prepara Contas e ORDENA (Evita o efeito de "pular" na tabela)
-	type accountResp struct {
-		PublicKey string   `json:"publicKey"`
-		NFTs      []string `json:"nfts"`
-	}
-	allAccounts := g.state.GetAllAccounts()
-	accountsResponse := make([]accountResp, 0, len(allAccounts))
-	for pubKey, data := range allAccounts {
-		accountsResponse = append(accountsResponse, accountResp{
-			PublicKey: pubKey,
-			NFTs:      data.GetNFTsList(),
-		})
-	}
-	sort.Slice(accountsResponse, func(i, j int) bool {
-		return accountsResponse[i].PublicKey < accountsResponse[j].PublicKey
-	})
-
-	// 5. Prepara Mempool Real do mapa local do Gateway
-	mempoolResponse := make([]*transaction.Transaction, 0, len(g.mempool))
-	for _, tx := range g.mempool {
-		mempoolResponse = append(mempoolResponse, tx)
-	}
-	sort.Slice(mempoolResponse, func(i, j int) bool {
-		return mempoolResponse[i].Timestamp > mempoolResponse[j].Timestamp
-	})
-
-	// 6. Monta o Objeto Final de Status
-	status := struct {
-		NetworkHeight  int                        `json:"network_height"`
-		NodesActive    []string                   `json:"nodes_active"`
-		CanonicalChain []BlockMetadata            `json:"canonical_chain"`
-		AllBlocks      []BlockMetadata            `json:"all_blocks"`
-		Accounts       []accountResp              `json:"accounts"`
-		Mempool        []*transaction.Transaction `json:"mempool"`
-		Timestamp      int64                      `json:"timestamp"`
-	}{
-		NetworkHeight:  len(chain),
-		NodesActive:    activeNodes,
-		CanonicalChain: canonicalChain,
-		AllBlocks:      allBlocks,
-		Accounts:       accountsResponse,
-		Mempool:        mempoolResponse,
-		Timestamp:      time.Now().UnixNano(),
-	}
+	status := g.buildNetworkStatus()
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -533,9 +581,9 @@ func (g *Gateway) handleHealth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	g.mu.RLock()
+	g.metaMu.RLock()
 	syncReady := g.networkSyncReady
-	g.mu.RUnlock()
+	g.metaMu.RUnlock()
 
 	health := map[string]interface{}{
 		"status": "ok",
@@ -575,19 +623,19 @@ func (g *Gateway) shutdown() error {
 }
 
 func (g *Gateway) handleDoubleSpendAttack(w http.ResponseWriter, r *http.Request) {
-	g.mu.Lock()
-	defer g.mu.Unlock()
+	g.stateMu.Lock()
+	defer g.stateMu.Unlock()
 
 	// 1. Localiza uma conta que tenha pelo menos um NFT
 	allAccounts := g.state.GetAllAccounts()
 	var targetPubKey string
 	var nftID string
-	
+
 	// Busca a primeira conta que possua pelo menos 1 NFT
 	for pubKey, acc := range allAccounts {
 		if acc != nil && len(acc.NFTs) > 0 {
 			targetPubKey = pubKey
-			
+
 			// Como NFTs é um map[string]bool, pegamos a primeira chave do mapa
 			for id := range acc.NFTs {
 				nftID = id
@@ -601,14 +649,14 @@ func (g *Gateway) handleDoubleSpendAttack(w http.ResponseWriter, r *http.Request
 		http.Error(w, "Nenhuma conta com NFTs disponível para ataque. Rode o Chaos Mint primeiro.", http.StatusBadRequest)
 		return
 	}
-	
+
 	// 2. Cria duas transações conflitantes (Tipo 1 = Transferência)
 	tx1 := transaction.Transaction{
 		ID:        "ATTACK_A_" + nftID,
 		PublKey:   targetPubKey,
 		Recipient: "DESTINATARIO_LEGITIMO",
 		NFTID:     nftID,
-		Type:      1, 
+		Type:      1,
 		Timestamp: time.Now().UnixNano(),
 	}
 
@@ -617,7 +665,7 @@ func (g *Gateway) handleDoubleSpendAttack(w http.ResponseWriter, r *http.Request
 		PublKey:   targetPubKey,
 		Recipient: "DESTINATARIO_HACKER",
 		NFTID:     nftID,
-		Type:      1, 
+		Type:      1,
 		Timestamp: time.Now().UnixNano() + 1,
 	}
 
@@ -710,7 +758,7 @@ func (g *Gateway) handleUpdateDifficulty(w http.ResponseWriter, r *http.Request)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"status": "success",
+		"status":         "success",
 		"new_difficulty": newDifficulty,
 	})
 }

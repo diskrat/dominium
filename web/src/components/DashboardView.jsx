@@ -3,7 +3,7 @@ import { Cpu, Database } from "lucide-react";
 import { Badge } from "./ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
 
-const DashboardView = ({ nodes, mempool, accounts }) => {
+const DashboardView = ({ nodes, mempool, accounts, transactionStats }) => {
     return (
         <div className="space-y-4">
             <h2 className="text-xl font-semibold tracking-tight lg:text-2xl">
@@ -38,6 +38,45 @@ const DashboardView = ({ nodes, mempool, accounts }) => {
             </Card>
 
             <div className="grid grid-cols-[repeat(auto-fit,minmax(340px,1fr))] gap-4">
+                <Card>
+                    <CardHeader>
+                        <CardTitle className="text-base">Resumo de Transacoes</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                        <div className="grid grid-cols-2 gap-3 text-sm">
+                            <div className="rounded-md border border-border p-3">
+                                <p className="text-muted-foreground">Canonicas</p>
+                                <p className="mt-1 text-lg font-semibold">
+                                    {transactionStats?.canonicalTxCount || 0}
+                                </p>
+                            </div>
+                            <div className="rounded-md border border-border p-3">
+                                <p className="text-muted-foreground">Mempool</p>
+                                <p className="mt-1 text-lg font-semibold">
+                                    {transactionStats?.mempoolTxCount || 0}
+                                </p>
+                            </div>
+                            <div className="rounded-md border border-border p-3">
+                                <p className="text-muted-foreground">Forks/Total</p>
+                                <p className="mt-1 text-lg font-semibold">
+                                    {transactionStats?.allBlocksTxCount || 0}
+                                </p>
+                            </div>
+                            <div className="rounded-md border border-border p-3">
+                                <p className="text-muted-foreground">Orfaos</p>
+                                <p className="mt-1 text-lg font-semibold">
+                                    {transactionStats?.orphanTxCount || 0}
+                                </p>
+                            </div>
+                            <div className="rounded-md border border-border p-3">
+                                <p className="text-muted-foreground">Descartados</p>
+                                <p className="mt-1 text-lg font-semibold">
+                                    {transactionStats?.discardedTxCount || 0}
+                                </p>
+                            </div>
+                        </div>
+                    </CardContent>
+                </Card>
                 <Card>
                     <CardHeader>
                         <CardTitle className="flex items-center gap-2 text-base">

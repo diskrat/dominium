@@ -10,8 +10,11 @@ import (
 	"strconv" // Necessário para converter a string do .env para número
 	"strings"
 	"syscall"
+	"time"
 
 	"dominium/internal/node"
+
+	"github.com/segmentio/kafka-go"
 )
 
 func main() {
@@ -20,7 +23,6 @@ func main() {
 	mine := flag.Bool("mine", false, "Ativa o motor de mineracao PoW")
 	// Alteramos o valor padrão da flag para 0 para detectar se o usuário passou algo via terminal
 	difficultyFlag := flag.Int("difficulty", 0, "Dificuldade de mineracao (Nbits)")
-	dataDir := flag.String("data", "./data", "Diretorio de persistencia local (futuro)")
 	flag.Parse()
 
 	if *id == "" {
@@ -38,7 +40,7 @@ func main() {
 
 	// 2. Lógica de Prioridade para Dificuldade (Busca no .env primeiro)
 	difficulty := 4 // Valor padrão de segurança caso nada seja encontrado
-	
+
 	// Tenta ler "DIFFICULTY" (nome que você usou no .env)
 	if envDiff := os.Getenv("DIFFICULTY"); envDiff != "" {
 		if d, err := strconv.Atoi(envDiff); err == nil {
@@ -54,13 +56,31 @@ func main() {
 
 	brokers := strings.Split(brokerStr, ",")
 
-	// 3. Inicia o servidor com a dificuldade final decidida
-	nodeServer := node.NewNodeServer(ctx, *id, brokers, *mine, int32(difficulty), *dataDir)
-	
+	// 3. Espera Kafka ficar online antes de iniciar o node
+	for {
+		if kafkaOnline(brokers) {
+			break
+		}
+		log.Printf("[startup] Aguardando Kafka (%s) ficar online...", brokerStr)
+		time.Sleep(2 * time.Second)
+	}
+
+	nodeServer := node.NewNodeServer(ctx, *id, brokers, *mine, int32(difficulty))
 	log.Printf("[%s] Iniciando com Dificuldade: %d", *id, difficulty)
-	
 	if err := nodeServer.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "erro ao iniciar node: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// kafkaOnline faz um healthcheck simples tentando conectar no broker
+func kafkaOnline(brokers []string) bool {
+	for _, addr := range brokers {
+		conn, err := kafka.Dial("tcp", addr)
+		if err == nil {
+			conn.Close()
+			return true
+		}
+	}
+	return false
 }

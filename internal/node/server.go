@@ -11,7 +11,6 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -37,7 +36,6 @@ type NodeServer struct {
 	brokers    []string
 	mine       bool
 	difficulty int32
-	dataDir    string
 
 	state          *transaction.AccountState
 	mempool        *transaction.Mempool
@@ -45,13 +43,12 @@ type NodeServer struct {
 	txTransport    *network.KafkaTransactionTransport
 	blockTransport *network.KafkaBlockTransport
 
-	synced        atomic.Bool
-	healthyKafka  atomic.Bool
-	bootstrapOnce sync.Once
-	apiPort       int
+	synced       atomic.Bool
+	healthyKafka atomic.Bool
+	apiPort      int
 }
 
-func NewNodeServer(parent context.Context, id string, brokers []string, mine bool, difficulty int32, dataDir string) *NodeServer {
+func NewNodeServer(parent context.Context, id string, brokers []string, mine bool, difficulty int32) *NodeServer {
 	ctx, cancel := context.WithCancel(parent)
 	if len(brokers) == 0 || brokers[0] == "" {
 		brokers = []string{defaultBroker}
@@ -72,7 +69,6 @@ func NewNodeServer(parent context.Context, id string, brokers []string, mine boo
 		brokers:    brokers,
 		mine:       mine,
 		difficulty: difficulty,
-		dataDir:    dataDir,
 		state:      state,
 		mempool:    transaction.NewMempool(state),
 		blockchain: miner.NewBlockchain(),
@@ -264,36 +260,43 @@ func (n *NodeServer) processBlock(block *miner.Block) error {
 
 	// Verifica se este bloco causará uma reorganização
 	oldBestHash := n.blockchain.GetLatestHash()
-	oldChainLength := n.blockchain.GetChainLength()
 
-	if err := n.blockchain.AddBlock(*block); err != nil {
-		if strings.Contains(err.Error(), "ja existe") {
+	result, err := n.blockchain.AddBlock(*block)
+	if err != nil {
+		if errors.Is(err, miner.ErrDuplicateBlock) {
+			return nil
+		}
+		if errors.Is(err, miner.ErrOrphanBlock) {
 			return nil
 		}
 		return err
 	}
 
-	newChainLength := n.blockchain.GetChainLength()
+	if !result.TipUpdated {
+		return nil
+	}
 
-	// Se houve reorganização (cadeia ficou maior), processa reorg
-	if newChainLength > oldChainLength {
-		log.Printf("[Consenso] Reorganização detectada - Altura Local: %d, Altura Recebida: %d", oldChainLength, newChainLength)
-		if err := n.handleReorganization(oldBestHash, block.Hash); err != nil {
-			log.Printf("[%s] erro na reorganizacao: %v", n.id, err)
-			// Em caso de erro, tenta reverter para o estado anterior
-			return err
-		}
+	log.Printf("[Consenso] Reorganização detectada - Tip atualizado")
+	restoreTxs, err := n.handleReorganization(oldBestHash, result.NewTipHash)
+	if err != nil {
+		log.Printf("[%s] erro na reorganizacao: %v", n.id, err)
+		return err
 	}
 
 	if err := n.rebuildStateFromCanonicalChain(); err != nil {
 		return err
 	}
 
-	n.removeBlockTransactionsFromMempool(block)
+	for _, tx := range restoreTxs {
+		if err := n.mempool.Add(tx); err != nil {
+			log.Printf("[%s] falha ao re-adicionar transacao apos reorg: %v", n.id, err)
+		}
+	}
+
 	return nil
 }
 
-func (n *NodeServer) handleReorganization(oldTipHash, newTipHash []byte) error {
+func (n *NodeServer) handleReorganization(oldTipHash, newTipHash []byte) ([]*transaction.Transaction, error) {
 	// A reorganização já foi feita pelo AddBlock, agora precisamos
 	// devolver as transações dos blocos desconectados para a mempool
 
@@ -309,20 +312,38 @@ func (n *NodeServer) handleReorganization(oldTipHash, newTipHash []byte) error {
 		}
 	}
 
-	// Recria a mempool apenas com transações pendentes
-	pendingTxs := n.mempool.GetPending(10000)
-	n.mempool = transaction.NewMempool(n.state)
+	// Recolhe transacoes pendentes e transacoes de blocos descartados
+	toRestore := make(map[string]*transaction.Transaction)
+	addCandidate := func(tx *transaction.Transaction) {
+		if tx == nil || tx.ID == "" {
+			return
+		}
+		if blockTxs[tx.ID] {
+			return
+		}
+		toRestore[tx.ID] = tx
+	}
 
-	for _, tx := range pendingTxs {
-		if !blockTxs[tx.GetID()] {
-			if err := n.mempool.Add(tx); err != nil {
-				log.Printf("[%s] falha ao devolver transacao para mempool apos reorg: %v", n.id, err)
-			}
+	for _, pending := range n.mempool.GetPending(10000) {
+		if tx, ok := pending.(*transaction.Transaction); ok {
+			addCandidate(tx)
+		}
+	}
+
+	for _, block := range n.blockchain.PopDiscardedSnapshot() {
+		for _, tx := range block.Transactions {
+			txCopy := tx
+			addCandidate(&txCopy)
 		}
 	}
 
 	log.Printf("[%s] reorganizacao concluida: tip mudou de %x para %x", n.id, oldTipHash, newTipHash)
-	return nil
+
+	restore := make([]*transaction.Transaction, 0, len(toRestore))
+	for _, tx := range toRestore {
+		restore = append(restore, tx)
+	}
+	return restore, nil
 }
 
 func (n *NodeServer) validateBlockTransactions(block *miner.Block) bool {
@@ -377,14 +398,8 @@ func (n *NodeServer) rebuildStateFromCanonicalChain() error {
 		}
 	}
 
-	pending := n.mempool.GetPending(10000)
 	n.state = state
 	n.mempool = transaction.NewMempool(state)
-	for _, tx := range pending {
-		if err := n.mempool.Add(tx); err != nil {
-			log.Printf("[%s] descarte transacao pendente apos rebuild: %v", n.id, err)
-		}
-	}
 	return nil
 }
 

@@ -31,6 +31,14 @@ const App = () => {
     const [canonicalHashes, setCanonicalHashes] = useState(new Set());
     const [accounts, setAccounts] = useState([]);
     const [mempool, setMempool] = useState([]);
+    const [chaosMintCount, setChaosMintCount] = useState(10);
+    const [transactionStats, setTransactionStats] = useState({
+        canonicalTxCount: 0,
+        allBlocksTxCount: 0,
+        orphanTxCount: 0,
+        discardedTxCount: 0,
+        mempoolTxCount: 0,
+    });
     const [isMinting, setIsMinting] = useState(false);
     const [attackLogs, setAttackLogs] = useState([]);
     const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -50,10 +58,10 @@ const App = () => {
         setIsUpdatingDiff(false);
     };
 
-    const handleChaosMintClick = async () => {
+    const handleChaosMintClick = async (count = chaosMintCount) => {
         setIsMinting(true);
         const toastId = toast.loading("Disparando transacoes...");
-        const successCount = await executeChaosMint(10);
+        const successCount = await executeChaosMint(count);
         if (successCount > 0) {
             toast.success(`${successCount} transacoes enviadas.`, {
                 id: toastId,
@@ -118,6 +126,13 @@ const App = () => {
 
                 setAccounts(data.accounts || []);
                 setMempool(data.mempool || []);
+                setTransactionStats({
+                    canonicalTxCount: data.canonical_tx_count || 0,
+                    allBlocksTxCount: data.all_blocks_tx_count || 0,
+                    orphanTxCount: data.orphan_tx_count || 0,
+                    discardedTxCount: data.discarded_tx_count || 0,
+                    mempoolTxCount: data.mempool_tx_count || 0,
+                });
 
                 // Simulação simples de interceptação de Logs de Ataque
                 if (data.mempool && data.mempool.length > 0) {
@@ -200,6 +215,7 @@ const App = () => {
                                 nodes={nodes}
                                 mempool={mempool}
                                 accounts={accounts}
+                                transactionStats={transactionStats}
                             />
                         </Suspense>
                         <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)]">
@@ -212,6 +228,8 @@ const App = () => {
                                     handleChaosMintClick={handleChaosMintClick}
                                     isMinting={isMinting}
                                     handleGenerateWalletClick={handleGenerateWalletClick}
+                                    chaosMintCount={chaosMintCount}
+                                    setChaosMintCount={setChaosMintCount}
                                 />
                             </Suspense>
                             <Suspense fallback={loadingFallback}>

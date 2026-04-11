@@ -17,15 +17,34 @@ type BlockNode struct {
 
 // Blockchain agora suporta forks mantendo todos os blocos num mapa e rastreando a ponta (tip) com maior altura.
 type Blockchain struct {
-	mu        sync.RWMutex
-	blocks    map[string]*BlockNode // Mapeia o Hash (em hex) para o nó correspondente
-	bestChain *BlockNode            // Aponta para o bloco no topo da corrente mais longa
+	mu              sync.RWMutex
+	blocks          map[string]*BlockNode          // Mapeia o Hash (em hex) para o nó correspondente
+	bestChain       *BlockNode                     // Aponta para o bloco no topo da corrente mais longa
+	orphans         map[string]Block               // Blocos sem pai conhecido, por hash
+	orphansByParent map[string]map[string]struct{} // parentHashHex -> set(childHashHex)
+	discarded       map[string]Block               // Blocos descartados por consenso (fork perdedor)
 }
+
+// AddBlockResult descreve o efeito de uma adicao de bloco.
+type AddBlockResult struct {
+	Added      bool
+	Orphan     bool
+	TipUpdated bool
+	NewTipHash []byte
+}
+
+var (
+	ErrDuplicateBlock = errors.New("bloco ja existe na blockchain")
+	ErrOrphanBlock    = errors.New("bloco anterior (pai) nao encontrado - bloco orfao")
+)
 
 // NewBlockchain inicializa a cadeia estruturada em árvore.
 func NewBlockchain() *Blockchain {
 	return &Blockchain{
-		blocks: make(map[string]*BlockNode),
+		blocks:          make(map[string]*BlockNode),
+		orphans:         make(map[string]Block),
+		orphansByParent: make(map[string]map[string]struct{}),
+		discarded:       make(map[string]Block),
 	}
 }
 
@@ -48,13 +67,19 @@ func (bc *Blockchain) IsEmpty() bool {
 }
 
 // AddBlock tenta inserir um novo bloco na estrutura de árvore.
-func (bc *Blockchain) AddBlock(newBlock Block) error {
+func (bc *Blockchain) AddBlock(newBlock Block) (AddBlockResult, error) {
 	bc.mu.Lock()
 	defer bc.mu.Unlock()
 
+	result := AddBlockResult{}
+	oldBest := bc.bestChain
+
 	blockHashHex := hex.EncodeToString(newBlock.Hash)
 	if _, exists := bc.blocks[blockHashHex]; exists {
-		return errors.New("bloco ja existe na blockchain")
+		return result, ErrDuplicateBlock
+	}
+	if _, exists := bc.orphans[blockHashHex]; exists {
+		return result, ErrDuplicateBlock
 	}
 
 	newNode := &BlockNode{
@@ -64,25 +89,30 @@ func (bc *Blockchain) AddBlock(newBlock Block) error {
 	// Lógica para o bloco Gênesis (não tem bloco anterior)
 	if len(newBlock.HashOfPrevious) == 0 {
 		if bc.bestChain != nil {
-			return errors.New("bloco genesis ja existe")
+			return result, errors.New("bloco genesis ja existe")
 		}
 		newNode.Height = 0
 		bc.blocks[blockHashHex] = newNode
 		bc.bestChain = newNode
-		return nil
+		result.Added = true
+		result.TipUpdated = true
+		result.NewTipHash = newNode.Block.Hash
+		bc.attachOrphans(newNode)
+		return result, nil
 	}
 
 	// Procura o bloco pai no mapa para verificar se a ligação é válida
 	parentHashHex := hex.EncodeToString(newBlock.HashOfPrevious)
 	parentNode, exists := bc.blocks[parentHashHex]
 	if !exists {
-		// Num cenário real P2P, poderiamos pedir este bloco à rede
-		return errors.New("bloco anterior (pai) nao encontrado - bloco orfao")
+		bc.addOrphan(newBlock)
+		result.Orphan = true
+		return result, ErrOrphanBlock
 	}
 
 	// Valida as regras de consenso do bloco em relação ao seu pai específico
 	if !ValidateBlock(newBlock, &parentNode.Block) {
-		return errors.New("bloco invalido: falha na validacao de consenso")
+		return result, errors.New("bloco invalido: falha na validacao de consenso")
 	}
 
 	// Configura a relação com o pai e incrementa a altura
@@ -91,19 +121,218 @@ func (bc *Blockchain) AddBlock(newBlock Block) error {
 
 	// Insere no armazenamento
 	bc.blocks[blockHashHex] = newNode
+	result.Added = true
+	bc.updateBestChain(newNode, parentNode)
+	bc.attachOrphans(newNode)
+	bc.reselectBestChain()
+	bc.pruneStaleForks()
 
-	// Aplica a REGRA DA CORRENTE MAIS LONGA (Nakamoto Consensus)
-	// Se a altura deste novo bloco for maior que a do bestChain atual, ele torna-se o novo tip oficial
-	if newNode.Height > bc.bestChain.Height {
+	if bc.bestChain != oldBest {
+		result.TipUpdated = true
+		result.NewTipHash = bc.bestChain.Block.Hash
+	}
+
+	return result, nil
+}
+
+func (bc *Blockchain) addOrphan(block Block) {
+	blockHashHex := hex.EncodeToString(block.Hash)
+	bc.orphans[blockHashHex] = block
+
+	parentHex := hex.EncodeToString(block.HashOfPrevious)
+	children, exists := bc.orphansByParent[parentHex]
+	if !exists {
+		children = make(map[string]struct{})
+		bc.orphansByParent[parentHex] = children
+	}
+	children[blockHashHex] = struct{}{}
+}
+
+func (bc *Blockchain) popOrphansByParent(parentHashHex string) []Block {
+	children, exists := bc.orphansByParent[parentHashHex]
+	if !exists {
+		return nil
+	}
+	delete(bc.orphansByParent, parentHashHex)
+
+	var blocks []Block
+	for childHashHex := range children {
+		if orphan, ok := bc.orphans[childHashHex]; ok {
+			blocks = append(blocks, orphan)
+			delete(bc.orphans, childHashHex)
+		}
+	}
+	return blocks
+}
+
+func (bc *Blockchain) attachOrphans(parent *BlockNode) {
+	queue := []*BlockNode{parent}
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+
+		parentHashHex := hex.EncodeToString(current.Block.Hash)
+		orphans := bc.popOrphansByParent(parentHashHex)
+		for _, orphan := range orphans {
+			childHashHex := hex.EncodeToString(orphan.Hash)
+			if _, exists := bc.blocks[childHashHex]; exists {
+				continue
+			}
+			if !ValidateBlock(orphan, &current.Block) {
+				continue
+			}
+
+			childNode := &BlockNode{
+				Block:  orphan,
+				Parent: current,
+				Height: current.Height + 1,
+			}
+			bc.blocks[childHashHex] = childNode
+			bc.updateBestChain(childNode, current)
+			queue = append(queue, childNode)
+		}
+	}
+}
+
+func (bc *Blockchain) updateBestChain(candidate, parent *BlockNode) {
+	if bc.bestChain == nil {
+		bc.bestChain = candidate
+		return
+	}
+	if parent == bc.bestChain {
+		bc.bestChain = candidate
+		return
+	}
+	if candidate.Height >= bc.bestChain.Height+2 {
 		oldHeight := bc.bestChain.Height
-		bc.bestChain = newNode
-		// Log de reorganização se houve mudança
-		if oldHeight != newNode.Height-1 {
-			log.Printf("[Consenso] Fork detectado! Altura Local: %d, Altura Recebida: %d. Mudando de cadeia.", oldHeight, newNode.Height)
+		bc.bestChain = candidate
+		log.Printf("[Consenso] Fork detectado! Altura Local: %d, Altura Recebida: %d. Mudando de cadeia.", oldHeight, candidate.Height)
+	}
+}
+
+func (bc *Blockchain) reselectBestChain() {
+	if bc.bestChain == nil {
+		return
+	}
+
+	best := bc.bestChain
+	parentSet := make(map[string]bool)
+	for _, node := range bc.blocks {
+		if node != nil && node.Parent != nil {
+			parentSet[hex.EncodeToString(node.Parent.Block.Hash)] = true
 		}
 	}
 
-	return nil
+	for hashHex, node := range bc.blocks {
+		if node == nil {
+			continue
+		}
+		if parentSet[hashHex] {
+			continue
+		}
+		if node.Height >= best.Height+2 {
+			best = node
+		}
+	}
+
+	if best != bc.bestChain {
+		oldHeight := bc.bestChain.Height
+		bc.bestChain = best
+		log.Printf("[Consenso] Fork detectado! Altura Local: %d, Altura Recebida: %d. Mudando de cadeia.", oldHeight, best.Height)
+	}
+}
+
+func (bc *Blockchain) pruneStaleForks() {
+	if bc.bestChain == nil {
+		return
+	}
+
+	canonical := make(map[string]bool)
+	current := bc.bestChain
+	for current != nil {
+		canonical[hex.EncodeToString(current.Block.Hash)] = true
+		current = current.Parent
+	}
+
+	parentSet := make(map[string]bool)
+	for _, node := range bc.blocks {
+		if node != nil && node.Parent != nil {
+			parentSet[hex.EncodeToString(node.Parent.Block.Hash)] = true
+		}
+	}
+
+	for hashHex, node := range bc.blocks {
+		if node == nil {
+			continue
+		}
+		if canonical[hashHex] {
+			continue
+		}
+		if parentSet[hashHex] {
+			continue
+		}
+		if bc.bestChain.Height < node.Height+2 {
+			continue
+		}
+		bc.discardBranch(node, canonical)
+	}
+}
+
+func (bc *Blockchain) discardBranch(tip *BlockNode, canonical map[string]bool) {
+	current := tip
+	for current != nil {
+		hashHex := hex.EncodeToString(current.Block.Hash)
+		if canonical[hashHex] {
+			return
+		}
+		bc.discarded[hashHex] = current.Block
+		delete(bc.blocks, hashHex)
+		current = current.Parent
+	}
+}
+
+// GetOrphanCount retorna quantos blocos estao aguardando o pai.
+func (bc *Blockchain) GetOrphanCount() int {
+	bc.mu.RLock()
+	defer bc.mu.RUnlock()
+	return len(bc.orphans)
+}
+
+// GetOrphansSnapshot retorna uma copia dos blocos orfaos atuais.
+func (bc *Blockchain) GetOrphansSnapshot() map[string]Block {
+	bc.mu.RLock()
+	defer bc.mu.RUnlock()
+
+	snapshot := make(map[string]Block, len(bc.orphans))
+	for hashHex, block := range bc.orphans {
+		snapshot[hashHex] = block
+	}
+	return snapshot
+}
+
+// GetDiscardedSnapshot retorna uma copia dos blocos descartados por consenso.
+func (bc *Blockchain) GetDiscardedSnapshot() map[string]Block {
+	bc.mu.RLock()
+	defer bc.mu.RUnlock()
+
+	snapshot := make(map[string]Block, len(bc.discarded))
+	for hashHex, block := range bc.discarded {
+		snapshot[hashHex] = block
+	}
+	return snapshot
+}
+
+// PopDiscardedSnapshot retorna e limpa os blocos descartados.
+func (bc *Blockchain) PopDiscardedSnapshot() map[string]Block {
+	bc.mu.Lock()
+	defer bc.mu.Unlock()
+
+	snapshot := make(map[string]Block, len(bc.discarded))
+	for hashHex, block := range bc.discarded {
+		snapshot[hashHex] = block
+	}
+	bc.discarded = make(map[string]Block)
+	return snapshot
 }
 
 // GetCanonicalChain retorna a lista linear de blocos que formam a corrente "oficial" atual.
