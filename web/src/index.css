@@ -1,0 +1,127 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+    :root {
+        --background: 222 47% 7%;
+        --foreground: 210 40% 98%;
+        --card: 224 42% 11%;
+        --card-foreground: 210 40% 96%;
+        --popover: 224 42% 11%;
+        --popover-foreground: 210 40% 96%;
+        --primary: 199 89% 48%;
+        --primary-foreground: 222 47% 11%;
+        --secondary: 217 33% 17%;
+        --secondary-foreground: 210 40% 98%;
+        --muted: 217 33% 17%;
+        --muted-foreground: 215 20% 65%;
+        --accent: 160 84% 39%;
+        --accent-foreground: 210 40% 98%;
+        --destructive: 0 63% 40%;
+        --destructive-foreground: 210 40% 98%;
+        --border: 217 33% 20%;
+        --input: 217 33% 20%;
+        --ring: 199 89% 48%;
+        --radius: 0.75rem;
+    }
+
+    * {
+        @apply border-border;
+    }
+
+    html,
+    body,
+    #root {
+        @apply h-full;
+    }
+
+    body {
+        @apply bg-background text-foreground antialiased;
+        margin: 0;
+        font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu,
+            Cantarell, Noto Sans, Helvetica Neue, Arial, "Apple Color Emoji",
+            "Segoe UI Emoji";
+    }
+}
+
+@layer components {
+    .block-explorer-flow {
+        background: radial-gradient(circle at 20% 20%, #0f172a 0%, #020617 65%);
+    }
+
+    .block-explorer-flow .react-flow__controls {
+        border: 1px solid hsl(var(--border));
+        border-radius: 0.5rem;
+        overflow: hidden;
+        box-shadow: 0 8px 24px rgba(2, 6, 23, 0.45);
+    }
+
+    .block-explorer-flow .react-flow__controls-button {
+        background-color: hsl(var(--card));
+        color: hsl(var(--foreground));
+        border-bottom: 1px solid hsl(var(--border));
+    }
+
+    .block-explorer-flow .react-flow__controls-button:last-child {
+        border-bottom: none;
+    }
+
+    .block-explorer-flow .react-flow__controls-button:hover {
+        background-color: hsl(var(--secondary));
+    }
+
+    .block-explorer-flow .react-flow__node,
+    .block-explorer-flow .react-flow__node-default {
+        background: transparent;
+        border: none;
+        box-shadow: none;
+        padding: 0;
+        width: auto;
+    }
+
+    .block-explorer-flow .react-flow__minimap {
+        background-color: rgba(15, 23, 42, 0.95);
+        border: 1px solid hsl(var(--border));
+        border-radius: 0.5rem;
+        box-shadow: 0 8px 24px rgba(2, 6, 23, 0.45);
+    }
+
+    .block-explorer-flow .react-flow__background {
+        background-color: transparent;
+    }
+}
+
+/* Number input spinner styling for dark theme */
+input[type="number"] {
+    color: hsl(var(--foreground));
+    background-color: transparent;
+}
+
+/* WebKit-based browsers: keep native spinner but style its background/opacity so it fits the dark theme */
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+    -webkit-appearance: inner-spin-button;
+    appearance: inner-spin-button;
+    margin: 0;
+    background: transparent;
+    opacity: 0.9;
+}
+
+/* Slightly reduce default padding so spinner sits close to the right edge */
+input[type="number"] {
+    padding-right: 0.5rem;
+}
+
+/* Firefox: leave native spinner enabled (don't force textfield appearance) so arrows remain visible */
+
+/* Hide native spinner for specific inputs that use custom icon controls */
+.hide-native-spinner::-webkit-outer-spin-button,
+.hide-native-spinner::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+
+.hide-native-spinner[type="number"] {
+    -moz-appearance: textfield;
+}

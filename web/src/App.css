@@ -1,0 +1,58 @@
+.app-shell {
+    min-height: 100vh;
+}
+
+.app-header {
+    padding: 0 24px;
+    background: transparent;
+}
+
+.app-content {
+    margin: 24px 16px;
+    padding: 24px;
+    background: transparent;
+    overflow-x: hidden;
+}
+
+.app-title {
+    margin: 16px 0;
+}
+
+.dashboard-title {
+    margin-bottom: 16px;
+}
+
+.block-grid {
+    height: 400px;
+    overflow: auto;
+    padding: 20px;
+    border-radius: 8px;
+    display: grid;
+    grid-auto-flow: column;
+    grid-gap: 28px;
+    align-items: start;
+}
+
+@media (max-width: 768px) {
+    .app-content {
+        margin: 12px 8px;
+        padding: 12px;
+    }
+
+    .app-title {
+        margin: 10px 0;
+        font-size: 20px !important;
+        line-height: 1.3;
+    }
+
+    .dashboard-title {
+        font-size: 22px !important;
+        line-height: 1.25;
+    }
+
+    .block-grid {
+        height: 360px;
+        padding: 12px;
+        grid-gap: 16px;
+    }
+}

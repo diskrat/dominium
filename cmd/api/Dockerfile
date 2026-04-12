@@ -1,0 +1,43 @@
+# Build stage
+FROM golang:1.23-alpine AS builder
+
+WORKDIR /app
+
+# Copy go mod files
+COPY go.mod go.sum ./
+
+# Download dependencies
+RUN go mod download
+
+# Copy source code
+COPY . .
+
+# Build the API binary
+RUN CGO_ENABLED=0 GOOS=linux go build -o api ./cmd/api
+
+# Final stage
+FROM alpine:3.19
+
+RUN apk add --no-cache ca-certificates
+
+WORKDIR /app
+
+# Copy the binary from builder
+COPY --from=builder /app/api .
+
+# Default environment
+ENV API_PORT=8085
+ENV API_ID=api-gateway
+ENV P2P_BROKERS=kafka:9092
+ENV ADMIN_KEY=
+ENV ADMIN_PUB=
+
+# Expose port
+EXPOSE 8085
+
+# Health check
+HEALTHCHECK --interval=10s --timeout=5s --start-period=5s --retries=3 \
+    CMD wget --quiet --tries=1 --spider http://localhost:8085/health || exit 1
+
+# Run the API
+CMD ./api -port=${API_PORT} -id=${API_ID} -p2p=${P2P_BROKERS} -admin-key=${ADMIN_KEY} -admin-pub=${ADMIN_PUB}

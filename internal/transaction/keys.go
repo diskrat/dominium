@@ -1,31 +1,48 @@
-// package transaction handles the generation and management of cryptographic identities.
 package transaction
 
-// internal/transaction/keys.go
 import (
-	"crypto/ed25519"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
-	"fmt"
-	"log"
+	"crypto/x509"
+	"encoding/hex"
+	"errors"
 )
 
-// GenerateKeyPair creates a new ed25519 private and public key pair.
-// this is used when a new user joins the network or creates a new wallet.
-func GenerateKeyPair() (ed25519.PrivateKey, ed25519.PublicKey, error) {
-	// generate the key pair using a cryptographically secure random source.
-	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+func GenerateKeyPair() (*ecdsa.PrivateKey, *ecdsa.PublicKey, error) {
+	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
-		log.Printf("[KEYS] Error: failed to generate key pair: %v", err)
 		return nil, nil, err
 	}
-
-	log.Printf("[KEYS] Success: new key pair generated")
-	return priv, pub, nil
+	publicKey := &privateKey.PublicKey
+	return privateKey, publicKey, nil
 }
 
-// PublicKeyToAddress converts a public key into a human-readable string.
-// in many blockchains, this would involve extra hashing (like ripemd160), 
-// but for now, we can hex-encode the public key.
-func PublicKeyToAddress(pub ed25519.PublicKey) string {
-	return fmt.Sprintf("%x", pub)
+func EncodePublicKey(pub *ecdsa.PublicKey) string {
+	if pub == nil {
+		return ""
+	}
+	pubBytes, err := x509.MarshalPKIXPublicKey(pub)
+	if err != nil {
+		return ""
+	}
+	return hex.EncodeToString(pubBytes)
+}
+
+func DecodePublicKey(pubHex string) (*ecdsa.PublicKey, error) {
+	pubBytes, err := hex.DecodeString(pubHex)
+	if err != nil {
+		return nil, err
+	}
+
+	parsed, err := x509.ParsePKIXPublicKey(pubBytes)
+	if err != nil {
+		return nil, err
+	}
+
+	pub, ok := parsed.(*ecdsa.PublicKey)
+	if !ok {
+		return nil, errors.New("tipo de chave publica invalido")
+	}
+	return pub, nil
 }

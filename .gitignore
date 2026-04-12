@@ -30,3 +30,23 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# Project-specific
+logs/
+*.log
+
+# Node.js / npm
+node_modules/
+package-lock.json
+
+# Environment & Secrets
+.env
+.env.local
+.env.*.local
+*.pem
+config/runtime.env
+
+# Build outputs
+# Vite production build (static site)
+/web/dist
+/dist

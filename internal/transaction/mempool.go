@@ -1,115 +1,136 @@
-// package transaction handles the staging area for unconfirmed transactions.
 package transaction
 
 import (
-	"fmt"
-	"log"
-	"sort"
+	"errors"
 	"sync"
 )
 
-// Mempool represents a thread-safe in-memory pool of transactions
-// waiting to be included in a block by a miner.
-type Mempool struct {
-	mu              sync.RWMutex           // ensures safe concurrent access.
-	Transactions    map[string]Transaction // unique key-value store for pending txs.
-	MaxTransactions int                    // pool capacity limit.
+type Tx interface {
+	GetID() string
+	Validate(state *AccountState) error
+	Execute(state *AccountState) error
 }
 
-// NewMempool initializes and returns a new Mempool instance.
-func NewMempool(MaxTransactions int) *Mempool {
+// Mempool armazena transacoes pendentes.
+type Mempool struct {
+	mu           sync.RWMutex
+	transactions map[string]Tx
+	state        *AccountState
+}
+
+func NewMempool(state *AccountState) *Mempool {
 	return &Mempool{
-		Transactions:    make(map[string]Transaction),
-		MaxTransactions: MaxTransactions,
+		transactions: make(map[string]Tx),
+		state:        state,
 	}
 }
 
-// AddTransactionToMempool performs safety checks and adds a valid transaction to the pool.
-func (m *Mempool) AddTransactionToMempool(tx Transaction) error {
+func (m *Mempool) Add(tx Tx) error {
+	if tx == nil {
+		return errors.New("transacao nula")
+	}
+	if tx.GetID() == "" {
+		return errors.New("ID da transacao ausente")
+	}
+
+	m.mu.RLock()
+	state := m.state
+	m.mu.RUnlock()
+	if state == nil {
+		return errors.New("estado da mempool nao configurado")
+	}
+
+	if err := tx.Validate(state); err != nil {
+		return err
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// check if the pool has reached its defined capacity.
-	if len(m.Transactions) >= m.MaxTransactions {
-		err := fmt.Errorf("mempool is full")
-		log.Printf("[MEMPOOL] Error: %v", err)
-		return err
+	if _, exists := m.transactions[tx.GetID()]; exists {
+		return errors.New("transacao ja existe na mempool")
 	}
 
-	// verify if the transaction ID already exists to prevent duplicates.
-	_, ok := m.Transactions[tx.TXid]
-	if ok {
-		err := fmt.Errorf("transaction %s already in queue", tx.TXid)
-		log.Printf("[MEMPOOL] Error: %v", err)
-		return err
-	}
-
-	// ==========================================
-	// DOUBLE SPEND DEFENSE (Requirement 6)
-	// ==========================================
-	// Scan the mempool to ensure no one is trying to transfer or register 
-	// the same asset ID in another pending transaction.
-	for _, pendingTx := range m.Transactions {
-		if pendingTx.AssetID == tx.AssetID {
-			err := fmt.Errorf("DOUBLE SPEND ATTEMPT DETECTED: Asset %s is already pending", tx.AssetID)
-			log.Printf("[SECURITY] Alert: %v", err)
-			return err
-		}
-	}
-
-	// store the transaction.
-	m.Transactions[tx.TXid] = tx
-
-	// log successful acceptance.
-	log.Printf("[MEMPOOL] Accept: %s | Action: %s | Asset: %s | Queue: %d/%d",
-		tx.TXid, tx.Action, tx.AssetID, len(m.Transactions), m.MaxTransactions)
-
+	m.transactions[tx.GetID()] = tx
 	return nil
 }
 
-// RemoveTransactionsFromMempool removes mined transactions from the pool.
-func (m *Mempool) RemoveTransactionsFromMempool(txids []string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+func (m *Mempool) GetPending(limit int) []Tx {
 
-	for _, id := range txids {
-		delete(m.Transactions, id)
-	}
-	log.Printf("[MEMPOOL] Cleared: %d transactions removed after mining", len(txids))
-}
-
-// GetTransactionsMinerMempool selects the top transactions by fee to be included in a block.
-func (m *Mempool) GetTransactionsMinerMempool(limit int) []Transaction {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	var selected []Transaction
-	for _, tx := range m.Transactions {
-		selected = append(selected, tx)
-	}
+	var pending []Tx
+	count := 0
 
-	// sort by fee: highest first
-	sort.Slice(selected, func(i, j int) bool {
-		return selected[i].Fee > selected[j].Fee
-	})
-
-	if len(selected) > limit {
-		selected = selected[:limit]
-	}
-
-	return selected
-}
-
-// GetPendingTransactions returns a thread-safe copy of all transactions currently in the mempool.
-// Used by the API to serve the frontend Dashboard.
-func (m *Mempool) GetPendingTransactions() []Transaction {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	var pending []Transaction
-	for _, tx := range m.Transactions {
+	for _, tx := range m.transactions {
+		if count >= limit {
+			break
+		}
 		pending = append(pending, tx)
+		count++
 	}
 
 	return pending
+}
+
+func (m *Mempool) Remove(txIDs []string) {
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for _, id := range txIDs {
+		delete(m.transactions, id)
+	}
+}
+
+func (m *Mempool) PruneInvalid() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	var removed []string
+	for id, tx := range m.transactions {
+		if err := tx.Validate(m.state); err != nil {
+			delete(m.transactions, id)
+			removed = append(removed, id)
+		}
+	}
+	return removed
+}
+
+func ValidateTransactionForState(state *AccountState, tx *Transaction, adminPubKey string) error {
+	if state == nil {
+		return errors.New("estado nulo")
+	}
+	if tx == nil {
+		return errors.New("transacao nula")
+	}
+
+	if err := state.EnsureAccount(tx.PublKey); err != nil {
+		return err
+	}
+	if err := state.EnsureAccount(tx.Recipient); err != nil {
+		return err
+	}
+	if err := tx.Validate(state); err != nil {
+		return err
+	}
+	return tx.ValidateConsensusRules(state, adminPubKey)
+}
+
+func FilterValidTransactions(state *AccountState, txs map[string]*Transaction, excludeIDs map[string]bool, adminPubKey string) map[string]*Transaction {
+	valid := make(map[string]*Transaction)
+	for id, tx := range txs {
+		if excludeIDs != nil && excludeIDs[id] {
+			continue
+		}
+		if tx == nil {
+			continue
+		}
+		if err := ValidateTransactionForState(state, tx, adminPubKey); err != nil {
+			continue
+		}
+		valid[id] = tx
+	}
+	return valid
 }

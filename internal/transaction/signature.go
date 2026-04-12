@@ -1,34 +1,22 @@
-// package transaction handles cryptographic validation for the network
 package transaction
 
-// internal/transaction/signature.go
 import (
-	"crypto/ed25519"
-	"log"
+	"crypto/ecdsa"
+	"crypto/rand"
+	"crypto/sha256"
 )
 
-// VerifySignature checks if a signature is valid for a given public key and data.
-// This is a stateless function used strictly by validators and miners.
-// It NEVER requires the Private Key.
-func VerifySignature(pubKey []byte, signature []byte, data []byte) bool {
-	// 1. ed25519 public keys must be exactly 32 bytes
-	if len(pubKey) != ed25519.PublicKeySize {
-		log.Printf("[VALIDATION] Error: Invalid public key length (%d bytes)", len(pubKey))
-		return false
+func SignECDSA(privKey *ecdsa.PrivateKey, data []byte) ([]byte, error) {
+	hash := sha256.Sum256(data)
+	signature, err := ecdsa.SignASN1(rand.Reader, privKey, hash[:])
+	if err != nil {
+		return nil, err
 	}
+	return signature, nil
+}
 
-	// 2. ed25519 signatures must be exactly 64 bytes
-	if len(signature) != ed25519.SignatureSize {
-		log.Printf("[VALIDATION] Error: Invalid signature length (%d bytes)", len(signature))
-		return false
-	}
-
-	// 3. The magic happens here: Verify checks if the signature matches the data and pubKey
-	isValid := ed25519.Verify(pubKey, data, signature)
-	
-	if !isValid {
-		log.Printf("[VALIDATION] Error: Signature does not match data/pubkey")
-	}
-
+func VerifyECDSA(publiKey *ecdsa.PublicKey, data []byte, signature []byte) bool {
+	hash := sha256.Sum256(data)
+	isValid := ecdsa.VerifyASN1(publiKey, hash[:], signature)
 	return isValid
 }

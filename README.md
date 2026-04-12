@@ -52,133 +52,229 @@ Este projeto implementa uma blockchain distribuída baseada em Proof of Work (Po
 - Visualizar o crescimento da blockchain em tempo real, exibindo forks, os vários blocos gerados e as relações entre eles.
 - Executar e simular um ataque de gasto duplo (double spending) verificando seu impacto na rede.
 
----
+## Arquitetura do Sistema
 
-## Guia de Instalação e Execução
+### Componentes Principais
 
-Existem duas formas de rodar a rede Dominium: a **Automática** (recomendada para testes rápidos) e a **Manual** (ideal para acompanhar os logs detalhados de cada nó).
+- **API Gateway**: Interface REST para submissão de transações e consultas de estado
+- **Node Servers**: Nós mineradores que mantêm cópias da blockchain e executam Proof of Work
+- **Kafka**: Sistema de mensageria para comunicação P2P entre nós
+- **Visualizer**: Interface web para monitoramento em tempo real e simulação de ataques
 
----
+### Topologia da Rede
 
-## 1. Modo Automático (Docker Compose)
+```
+┌─────────────────┐    Kafka Topics    ┌─────────────────┐
+│   API Gateway   │◄─────────────────►│   Node Servers  │
+│   (Port 8085)   │                   │   (Miners)      │
+└─────────────────┘                   └─────────────────┘
+         │                                       │
+         │                                       │
+         ▼                                       ▼
+┌─────────────────┐                   ┌─────────────────┐
+│   Visualizer    │◄──────────────────┤   WebSocket     │
+│   (Port 8080)   │                   │   Updates       │
+└─────────────────┘                   └─────────────────┘
+```
 
-Este comando sobe toda a infraestrutura (Kafka + 3 Nós da Blockchain) de uma única vez, já configurando as portas e identidades.
+## Como Executar
 
-Na pasta raiz do projeto, execute:
+### Método Recomendado: Docker Compose (Tudo Automático)
 
 ```bash
-docker-compose up --build
+# 1. Gerar configuração
+bash generate-env.sh
+
+# 2. Iniciar tudo (7 serviços simultaneamente)
+docker-compose up -d
+
+# 3. Acessar aplicações
+# - API Gateway: http://localhost:8085
+# - Visualizer: http://localhost:8080
 ```
 
-Este comando irá compilar o código Go dentro dos containers e iniciar a rede P2P instantaneamente.
+**Serviços iniciados automaticamente:**
 
----
+- ✅ Zookeeper (coordenação)
+- ✅ Kafka (mensageria P2P)
+- ✅ 3 Nós mineradores (node-1, node-2, node-3)
+- ✅ API Gateway (porta 8085)
+- ✅ Visualizer (porta 8080)
 
-## 2. Modo Manual (Passo a Passo)
+### Método Manual (Para Desenvolvimento)
 
-### A. Configuração do Docker (O Mensageiro Kafka)
+#### Pré-requisitos
 
-O Kafka atua como o protocolo P2P da rede, permitindo que os nós Alpha, Beta e Gamma se comuniquem.
+- Go 1.21+
+- Node.js 16+ (para o visualizer)
+- Docker e Docker Compose
 
-**1. Para baixar e criar o container (primeira vez):**
+#### 1. Iniciar Infraestrutura
 
 ```bash
-docker run -d --name kafka-dominium -p 9092:9092 apache/kafka
+docker-compose up -d kafka zookeeper
 ```
 
-**2. Se o container já existir e estiver parado:**
+#### 2. Executar Nós Mineradores
 
 ```bash
-docker start kafka-dominium
+# Terminal 1: Nó 1
+go run ./cmd/node -id node-1 -p2p localhost:9092 -mine -difficulty 4
+
+# Terminal 2: Nó 2
+go run ./cmd/node -id node-2 -p2p localhost:9092 -mine -difficulty 4
+
+# Terminal 3: Nó 3
+go run ./cmd/node -id node-3 -p2p localhost:9092 -mine -difficulty 4
 ```
 
-**3. Verificação:** Digite `docker ps`. O status do `apache/kafka` deve ser `Up`.
-
----
-
-### B. Executando os 3 Nós da Blockchain
-
-Abra três terminais separados na pasta raiz do projeto (`dominium`) e execute os comandos abaixo para criar a rede distribuída:
-
-**Terminal 1 — Node Alpha (Porta 8080)**
+#### 3. Iniciar API Gateway
 
 ```bash
-go run cmd/sim/main.go -port=8080 -id=node-alpha -diff=2
+# Terminal 4: API Gateway
+go run ./cmd/api -port 8085 -id api-gateway -p2p localhost:9092 \
+  -admin-key $(grep ADMIN_KEY .env | cut -d'=' -f2) \
+  -admin-pub $(grep ADMIN_PUB .env | cut -d'=' -f2)
 ```
 
-**Terminal 2 — Node Beta (Porta 8081)**
+#### 4. Executar Visualizer
 
 ```bash
-go run cmd/sim/main.go -port=8081 -id=node-beta -diff=2
+cd web && npm install && npm run build && cd ..
+go build -o visualizer ./cmd/visualizer
+./visualizer
 ```
 
-**Terminal 3 — Node Gamma (Porta 8082)**
+## Reprodutibilidade e Testes Determinísticos
+
+### Configuração Inicial (Automática)
 
 ```bash
-go run cmd/sim/main.go -port=8082 -id=node-gamma -diff=2
+# Gerar arquivo .env com chaves padrão (sempre as mesmas)
+bash generate-env.sh
 ```
 
----
-
-## 3. Como Testar e Monitorar
-
-Com os nós rodando, abra o seu navegador no endereço:
-
-**http://localhost:8080**
-
-### O que observar no Dashboard:
-
-- **Sincronização em Tempo Real:** Clique em `+ Generate 1 Tx`. Observe que a transação aparece nas Mempools dos 3 nós quase simultaneamente. Isso demonstra a propagação via Kafka.
-
-- **Consenso e Mineração:** Assim que um nó minera o bloco, ele propaga o resultado. Se o Alpha ganhar a corrida, o Beta e Gamma validarão o bloco dele e limparão suas mempools automaticamente.
-
-- **Resiliência a Ataques:** Clique em `Simulate Attack`. O sistema tentará realizar um Double Spend. Você verá nos logs o nó rejeitando a transação fraudulenta enquanto mantém a integridade do Ledger.
-
-- **Dificuldade Dinâmica:** Altere o slider de dificuldade (0 a 32). Note que a rede levará mais tempo para encontrar o Hash conforme o número de zeros aumenta, simulando o comportamento real de redes como o Bitcoin.
-
----
-
-## 4. Visualizando os Logs em Colunas
-
-### 1. Usando o comando nativo do Docker (Recomendado para Debug)
-
-Em vez de rodar o comando geral que mistura tudo, você pode abrir 3 abas do seu terminal e rodar um comando para cada nó. Assim, você terá três "colunas" físicas na sua tela:
-
-| Aba   | Nó    | Comando                     |
-| ----- | ----- | --------------------------- |
-| Aba 1 | Alpha | `docker logs -f node-alpha` |
-| Aba 2 | Beta  | `docker logs -f node-beta`  |
-| Aba 3 | Gamma | `docker logs -f node-gamma` |
-
----
-
-### 2. Usando o utilitário `multitail` (Colunas reais no Linux/WSL)
-
-Se você estiver no Linux ou usando WSL no Windows, o utilitário `multitail` é perfeito para isso. Ele divide o seu terminal em colunas ou linhas automaticamente.
-
-**Comando:**
+### Execução Determinística (Para Apresentação)
 
 ```bash
-multitail -s 3 -l "docker logs -f node-alpha" -l "docker logs -f node-beta" -l "docker logs -f node-gamma"
+# Tudo em um comando
+docker-compose up -d
+
+# Ou manual para controle fino:
+docker-compose up -d kafka zookeeper
+go run ./cmd/node -id node-1 -p2p localhost:9092 -mine -difficulty 4
+go run ./cmd/node -id node-2 -p2p localhost:9092 -mine -difficulty 4
+go run ./cmd/node -id node-3 -p2p localhost:9092 -mine -difficulty 4
+go run ./cmd/api -port 8085 -id api-gateway -p2p localhost:9092 \
+  -admin-key $(grep ADMIN_KEY .env | cut -d'=' -f2) \
+  -admin-pub $(grep ADMIN_PUB .env | cut -d'=' -f2)
 ```
 
-**Opções utilizadas:**
+### Teste de Dificuldade (Demonstração de 20% da Nota)
 
-- `-s 3` — Divide a tela em 3 colunas verticais.
-- `-l` — Executa o comando de log para cada painel.
+```bash
+# Com Docker Compose - alterar dificuldade no .env
+echo "DIFFICULTY=8" >> .env
+docker-compose up -d
 
-**Visualização esperada no terminal:**
+# Ou manual:
+# Dificuldade baixa (rápido - ~1 segundo)
+go run ./cmd/node -id node-test -p2p localhost:9092 -mine -difficulty 8
 
-```
-┌─────────────────────┬─────────────────────┬─────────────────────┐
-│    node-alpha       │     node-beta        │     node-gamma      │
-│─────────────────────│─────────────────────│─────────────────────│
-│ [NODE] block #42    │ [NODE] block #42     │ [NODE] block #42    │
-│ [MEMPOOL]  a1b2c3...     │ [MEMPOOL]  a1b2c3...      │ [MEMPOOL]  a1b2c3...     │
-│ [VALIDATION]  hash valid    │ [VALIDATION]  hash valid     │ [VALIDATION]  hash valid    │
-│ [TRANSACTION] nonce=18432  │ [CONSENSUS] leader mining │ [CONSENSUS] leader mining│
-│ ...                 │ ...                  │ ...                 │
-└─────────────────────┴─────────────────────┴─────────────────────┘
+# Dificuldade alta (lento - ~30+ segundos)
+go run ./cmd/node -id node-test -p2p localhost:9092 -mine -difficulty 16
 ```
 
-> **Dica:** Caso o `multitail` não esteja instalado, execute `sudo apt install multitail` no Linux/WSL.
+### Uso de Seed para Transações Reprodutíveis
+
+O gerador de transações usa uma seed determinística para criar sempre as mesmas transações:
+
+```bash
+# No código Go - usar seed fixa para reprodutibilidade
+generator := transaction.NewGenerator(12345) // Seed sempre igual = transações sempre iguais
+
+# Para demonstração de ataque double spend:
+# 1. Use seed fixa para gerar NFT_ID previsível
+# 2. Tente mintar o mesmo NFT_ID duas vezes
+# 3. Sistema deve rejeitar a segunda transação
+```
+
+## Monitoramento e Testes
+
+### Visualizer Web
+
+- **URL**: http://localhost:8080
+- **Funcionalidades**:
+    - Monitoramento em tempo real da rede
+    - Simulação de transações caóticas
+    - Ataques de double spend
+    - Visualização da blockchain
+
+### API Examples
+
+Veja `API_EXAMPLES.md` para exemplos completos de uso da API.
+
+### Testes de Ataque
+
+```bash
+# Simular ataque de gasto duplo via visualizer
+curl -X POST http://localhost:8080/api/race-attack
+```
+
+## Estrutura do Projeto
+
+```
+dominium/
+├── cmd/
+│   ├── api/          # API Gateway server
+│   ├── node/         # Node server (miner)
+│   └── visualizer/   # Web visualizer server
+├── internal/
+│   ├── api/          # API gateway logic
+│   ├── miner/        # Mining and blockchain logic
+│   └── network/      # Kafka networking
+├── pkg/
+│   └── transaction/  # Transaction types and validation
+├── web/              # React frontend for visualizer
+│   ├── src/
+│   └── build/        # Built static files
+├── docs/             # Technical documentation
+└── docker-compose.yml
+```
+
+## Documentação
+
+- `docs/README.md` - Diagramas UML e documentação técnica
+- `API_EXAMPLES.md` - Exemplos de uso da API
+- `VISUALIZER_README.md` - Documentação específica do visualizer
+- `CONTRIBUTING.md` - Guia de contribuição
+
+## Desenvolvimento
+
+### Executar Testes
+
+```bash
+go test ./...
+```
+
+### Build
+
+```bash
+go build ./cmd/api
+go build ./cmd/node
+go build ./cmd/visualizer
+```
+
+### Docker
+
+```bash
+# Build all services
+docker-compose build
+
+# Run complete system
+docker-compose up
+```
+
+## Licença
+
+Este projeto está licenciado sob a MIT License - veja o arquivo LICENSE para detalhes.
