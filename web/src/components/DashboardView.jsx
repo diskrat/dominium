@@ -22,7 +22,7 @@ const DashboardView = ({ nodes, mempool, accounts, transactionStats }) => {
                         {nodes.map((node) => (
                             <div key={node.id} className="rounded-md border border-border bg-secondary/30 p-3">
                                 <p className="font-semibold">{node.id}</p>
-                                <div className="mt-2 flex items-center gap-2">
+                                <div className="mt-2 flex flex-wrap items-center gap-2">
                                     <Badge variant={node.status === "mining" ? "success" : "secondary"}>
                                         {node.status === "mining" ? "Minerando" : "Ocioso"}
                                     </Badge>

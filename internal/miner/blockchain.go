@@ -1,11 +1,13 @@
 package miner
 
 import (
-	"bytes"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"log"
 	"sync"
+
+	"dominium/internal/transaction"
 )
 
 // BlockNode embrulha um bloco com metadados para facilitar a navegação em árvore (para forks).
@@ -22,7 +24,6 @@ type Blockchain struct {
 	bestChain       *BlockNode                     // Aponta para o bloco no topo da corrente mais longa
 	orphans         map[string]Block               // Blocos sem pai conhecido, por hash
 	orphansByParent map[string]map[string]struct{} // parentHashHex -> set(childHashHex)
-	discarded       map[string]Block               // Blocos descartados por consenso (fork perdedor)
 }
 
 // AddBlockResult descreve o efeito de uma adicao de bloco.
@@ -31,6 +32,7 @@ type AddBlockResult struct {
 	Orphan     bool
 	TipUpdated bool
 	NewTipHash []byte
+	Discarded  []Block
 }
 
 var (
@@ -44,8 +46,63 @@ func NewBlockchain() *Blockchain {
 		blocks:          make(map[string]*BlockNode),
 		orphans:         make(map[string]Block),
 		orphansByParent: make(map[string]map[string]struct{}),
-		discarded:       make(map[string]Block),
 	}
+}
+
+func (bc *Blockchain) chainToNode(node *BlockNode) []Block {
+	var chain []Block
+	current := node
+	for current != nil {
+		chain = append(chain, current.Block)
+		current = current.Parent
+	}
+	for i, j := 0, len(chain)-1; i < j; i, j = i+1, j-1 {
+		chain[i], chain[j] = chain[j], chain[i]
+	}
+	return chain
+}
+
+func ValidateTransactionsAgainstState(state *transaction.AccountState, block Block, adminPubKey string) error {
+	if state == nil {
+		return errors.New("estado nulo")
+	}
+
+	for _, tx := range block.Transactions {
+		if err := state.EnsureAccount(tx.PublKey); err != nil {
+			return err
+		}
+		if err := state.EnsureAccount(tx.Recipient); err != nil {
+			return err
+		}
+
+		if err := tx.Validate(state); err != nil {
+			return fmt.Errorf("transacao invalida no bloco %x: %w", block.Hash, err)
+		}
+		if err := tx.ValidateConsensusRules(state, adminPubKey); err != nil {
+			return fmt.Errorf("transacao viola regras de consenso no bloco %x: %w", block.Hash, err)
+		}
+		if err := tx.Execute(state); err != nil {
+			return fmt.Errorf("falha ao executar transacao no bloco %x: %w", block.Hash, err)
+		}
+	}
+	return nil
+}
+
+func (bc *Blockchain) applyBlockTransactions(state *transaction.AccountState, block Block, adminPubKey string) error {
+	return ValidateTransactionsAgainstState(state, block, adminPubKey)
+}
+
+func (bc *Blockchain) validateBlockTransactions(parent *BlockNode, block Block, adminPubKey string) error {
+	state := transaction.NewAccountState()
+	if parent != nil {
+		previousChain := bc.chainToNode(parent)
+		for _, previousBlock := range previousChain {
+			if err := bc.applyBlockTransactions(state, previousBlock, adminPubKey); err != nil {
+				return fmt.Errorf("estado invalido antes do bloco: %w", err)
+			}
+		}
+	}
+	return bc.applyBlockTransactions(state, block, adminPubKey)
 }
 
 // GetLatestHash retorna o hash do bloco na ponta da corrente mais longa.
@@ -67,7 +124,7 @@ func (bc *Blockchain) IsEmpty() bool {
 }
 
 // AddBlock tenta inserir um novo bloco na estrutura de árvore.
-func (bc *Blockchain) AddBlock(newBlock Block) (AddBlockResult, error) {
+func (bc *Blockchain) AddBlock(newBlock Block, adminPubKey string) (AddBlockResult, error) {
 	bc.mu.Lock()
 	defer bc.mu.Unlock()
 
@@ -97,7 +154,7 @@ func (bc *Blockchain) AddBlock(newBlock Block) (AddBlockResult, error) {
 		result.Added = true
 		result.TipUpdated = true
 		result.NewTipHash = newNode.Block.Hash
-		bc.attachOrphans(newNode)
+		bc.attachOrphans(newNode, adminPubKey)
 		return result, nil
 	}
 
@@ -115,6 +172,10 @@ func (bc *Blockchain) AddBlock(newBlock Block) (AddBlockResult, error) {
 		return result, errors.New("bloco invalido: falha na validacao de consenso")
 	}
 
+	if err := bc.validateBlockTransactions(parentNode, newBlock, adminPubKey); err != nil {
+		return result, fmt.Errorf("bloco invalido: %w", err)
+	}
+
 	// Configura a relação com o pai e incrementa a altura
 	newNode.Parent = parentNode
 	newNode.Height = parentNode.Height + 1
@@ -123,11 +184,12 @@ func (bc *Blockchain) AddBlock(newBlock Block) (AddBlockResult, error) {
 	bc.blocks[blockHashHex] = newNode
 	result.Added = true
 	bc.updateBestChain(newNode, parentNode)
-	bc.attachOrphans(newNode)
+	bc.attachOrphans(newNode, adminPubKey)
 	bc.reselectBestChain()
-	bc.pruneStaleForks()
-
 	if bc.bestChain != oldBest {
+		// pruneStaleForks now returns the list of discarded blocks (deleted)
+		discarded := bc.pruneStaleForks()
+		result.Discarded = discarded
 		result.TipUpdated = true
 		result.NewTipHash = bc.bestChain.Block.Hash
 	}
@@ -165,7 +227,7 @@ func (bc *Blockchain) popOrphansByParent(parentHashHex string) []Block {
 	return blocks
 }
 
-func (bc *Blockchain) attachOrphans(parent *BlockNode) {
+func (bc *Blockchain) attachOrphans(parent *BlockNode, adminPubKey string) {
 	queue := []*BlockNode{parent}
 	for len(queue) > 0 {
 		current := queue[0]
@@ -179,6 +241,9 @@ func (bc *Blockchain) attachOrphans(parent *BlockNode) {
 				continue
 			}
 			if !ValidateBlock(orphan, &current.Block) {
+				continue
+			}
+			if err := bc.validateBlockTransactions(current, orphan, adminPubKey); err != nil {
 				continue
 			}
 
@@ -242,11 +307,12 @@ func (bc *Blockchain) reselectBestChain() {
 	}
 }
 
-func (bc *Blockchain) pruneStaleForks() {
+func (bc *Blockchain) pruneStaleForks() []Block {
 	if bc.bestChain == nil {
-		return
+		return nil
 	}
 
+	// Build canonical set (hashes that are in the current best chain)
 	canonical := make(map[string]bool)
 	current := bc.bestChain
 	for current != nil {
@@ -254,6 +320,7 @@ func (bc *Blockchain) pruneStaleForks() {
 		current = current.Parent
 	}
 
+	// Build a set of parent hashes to detect internal nodes
 	parentSet := make(map[string]bool)
 	for _, node := range bc.blocks {
 		if node != nil && node.Parent != nil {
@@ -261,6 +328,7 @@ func (bc *Blockchain) pruneStaleForks() {
 		}
 	}
 
+	var removed []Block
 	for hashHex, node := range bc.blocks {
 		if node == nil {
 			continue
@@ -274,21 +342,29 @@ func (bc *Blockchain) pruneStaleForks() {
 		if bc.bestChain.Height < node.Height+2 {
 			continue
 		}
-		bc.discardBranch(node, canonical)
+		// discard the branch and collect removed blocks
+		discarded := bc.discardBranch(node, canonical)
+		if len(discarded) > 0 {
+			removed = append(removed, discarded...)
+		}
 	}
+
+	return removed
 }
 
-func (bc *Blockchain) discardBranch(tip *BlockNode, canonical map[string]bool) {
+func (bc *Blockchain) discardBranch(tip *BlockNode, canonical map[string]bool) []Block {
+	var removed []Block
 	current := tip
 	for current != nil {
 		hashHex := hex.EncodeToString(current.Block.Hash)
 		if canonical[hashHex] {
-			return
+			break
 		}
-		bc.discarded[hashHex] = current.Block
+		removed = append(removed, current.Block)
 		delete(bc.blocks, hashHex)
 		current = current.Parent
 	}
+	return removed
 }
 
 // GetOrphanCount retorna quantos blocos estao aguardando o pai.
@@ -307,31 +383,6 @@ func (bc *Blockchain) GetOrphansSnapshot() map[string]Block {
 	for hashHex, block := range bc.orphans {
 		snapshot[hashHex] = block
 	}
-	return snapshot
-}
-
-// GetDiscardedSnapshot retorna uma copia dos blocos descartados por consenso.
-func (bc *Blockchain) GetDiscardedSnapshot() map[string]Block {
-	bc.mu.RLock()
-	defer bc.mu.RUnlock()
-
-	snapshot := make(map[string]Block, len(bc.discarded))
-	for hashHex, block := range bc.discarded {
-		snapshot[hashHex] = block
-	}
-	return snapshot
-}
-
-// PopDiscardedSnapshot retorna e limpa os blocos descartados.
-func (bc *Blockchain) PopDiscardedSnapshot() map[string]Block {
-	bc.mu.Lock()
-	defer bc.mu.Unlock()
-
-	snapshot := make(map[string]Block, len(bc.discarded))
-	for hashHex, block := range bc.discarded {
-		snapshot[hashHex] = block
-	}
-	bc.discarded = make(map[string]Block)
 	return snapshot
 }
 
@@ -359,6 +410,28 @@ func (bc *Blockchain) GetCanonicalChain() []Block {
 	}
 
 	return chain
+}
+
+func BuildStateFromChain(chain []Block) (*transaction.AccountState, map[string]bool, error) {
+	state := transaction.NewAccountState()
+	chainTxs := make(map[string]bool)
+
+	for _, block := range chain {
+		for _, tx := range block.Transactions {
+			chainTxs[tx.ID] = true
+			if err := state.EnsureAccount(tx.PublKey); err != nil {
+				return nil, nil, err
+			}
+			if err := state.EnsureAccount(tx.Recipient); err != nil {
+				return nil, nil, err
+			}
+			if err := tx.Execute(state); err != nil {
+				return nil, nil, err
+			}
+		}
+	}
+
+	return state, chainTxs, nil
 }
 
 // GetChainLength retorna o comprimento da corrente canônica atual.
@@ -425,63 +498,6 @@ func (bc *Blockchain) findCommonAncestorNoLock(hash1, hash2 []byte) ([]byte, err
 }
 
 // Reorganize reorganiza a blockchain para uma nova corrente mais longa.
-func (bc *Blockchain) Reorganize(newTipHash []byte) ([]Block, []Block, error) {
-	bc.mu.Lock()
-	defer bc.mu.Unlock()
-
-	newTipHex := hex.EncodeToString(newTipHash)
-	newTipNode, exists := bc.blocks[newTipHex]
-	if !exists {
-		return nil, nil, errors.New("novo tip nao encontrado")
-	}
-
-	if bc.bestChain == nil {
-		bc.bestChain = newTipNode
-		return nil, []Block{newTipNode.Block}, nil
-	}
-
-	// Encontra o ancestral comum
-	commonAncestorHash, err := bc.findCommonAncestorNoLock(bc.bestChain.Block.Hash, newTipHash)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	// Se o ancestral comum é o bestChain atual, não há reorganização necessária
-	if bytes.Equal(commonAncestorHash, bc.bestChain.Block.Hash) {
-		return nil, nil, nil
-	}
-
-	// Coleta blocos a serem desconectados (da corrente antiga)
-	var blocksToDisconnect []Block
-	current := bc.bestChain
-	for current != nil {
-		currentHash := hex.EncodeToString(current.Block.Hash)
-		commonHashHex := hex.EncodeToString(commonAncestorHash)
-		if currentHash == commonHashHex {
-			break
-		}
-		blocksToDisconnect = append(blocksToDisconnect, current.Block)
-		current = current.Parent
-	}
-
-	// Coleta blocos a serem conectados (da nova corrente)
-	var blocksToConnect []Block
-	current = newTipNode
-	for current != nil {
-		currentHash := hex.EncodeToString(current.Block.Hash)
-		commonHashHex := hex.EncodeToString(commonAncestorHash)
-		if currentHash == commonHashHex {
-			break
-		}
-		blocksToConnect = append([]Block{current.Block}, blocksToConnect...) // prepend
-		current = current.Parent
-	}
-
-	// Executa a reorganização
-	bc.bestChain = newTipNode
-
-	return blocksToDisconnect, blocksToConnect, nil
-}
 
 func (bc *Blockchain) GetAllBlocks() map[string]BlockNode {
 	bc.mu.RLock()

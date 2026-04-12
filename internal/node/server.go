@@ -1,6 +1,7 @@
 package node
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"encoding/json"
@@ -42,6 +43,7 @@ type NodeServer struct {
 	blockchain     *miner.Blockchain
 	txTransport    *network.KafkaTransactionTransport
 	blockTransport *network.KafkaBlockTransport
+	blockArrived   chan struct{}
 
 	synced       atomic.Bool
 	healthyKafka atomic.Bool
@@ -57,22 +59,23 @@ func NewNodeServer(parent context.Context, id string, brokers []string, mine boo
 	apiPort := 8081
 	if strings.HasPrefix(id, "node-") {
 		if num, err := strconv.Atoi(strings.TrimPrefix(id, "node-")); err == nil {
-			apiPort = 8081 + num
+			apiPort = 8080 + num
 		}
 	}
 
 	state := transaction.NewAccountState()
 	return &NodeServer{
-		ctx:        ctx,
-		cancel:     cancel,
-		id:         strings.TrimSpace(id),
-		brokers:    brokers,
-		mine:       mine,
-		difficulty: difficulty,
-		state:      state,
-		mempool:    transaction.NewMempool(state),
-		blockchain: miner.NewBlockchain(),
-		apiPort:    apiPort,
+		ctx:          ctx,
+		cancel:       cancel,
+		id:           strings.TrimSpace(id),
+		brokers:      brokers,
+		mine:         mine,
+		difficulty:   difficulty,
+		state:        state,
+		mempool:      transaction.NewMempool(state),
+		blockchain:   miner.NewBlockchain(),
+		blockArrived: make(chan struct{}, 1),
+		apiPort:      apiPort,
 	}
 }
 
@@ -120,15 +123,15 @@ func (n *NodeServer) Run() error {
 
 		var localBlocks []localBlockInfo
 
-		for hashHex, node := range n.blockchain.GetAllBlocks() {
+		for height, block := range n.blockchain.GetCanonicalChain() {
 			localBlocks = append(localBlocks, localBlockInfo{
-				Hash:       hashHex,
-				ParentHash: hex.EncodeToString(node.Block.HashOfPrevious),
-				MinerID:    node.Block.Miner,
-				Height:     node.Height,
-				TxCount:    len(node.Block.Transactions),
-				Difficulty: node.Block.Nbits,
-				Timestamp:  node.Block.Timestamp,
+				Hash:       hex.EncodeToString(block.Hash),
+				ParentHash: hex.EncodeToString(block.HashOfPrevious),
+				MinerID:    block.Miner,
+				Height:     uint64(height),
+				TxCount:    len(block.Transactions),
+				Difficulty: block.Nbits,
+				Timestamp:  block.Timestamp,
 			})
 		}
 
@@ -159,6 +162,12 @@ func (n *NodeServer) subscribeTransactions() error {
 func (n *NodeServer) handleIncomingTransaction(tx *transaction.Transaction) error {
 	if tx == nil {
 		return errors.New("transacao nula")
+	}
+
+	adminPubKey := strings.TrimSpace(os.Getenv("ADMIN_PUB"))
+	if err := transaction.ValidateTransactionForState(n.state, tx, adminPubKey); err != nil {
+		log.Printf("[%s] transacao invalida recebida: %v", n.id, err)
+		return err
 	}
 
 	if err := n.ensureAccount(tx.PublKey); err != nil {
@@ -254,14 +263,11 @@ func (n *NodeServer) processBlock(block *miner.Block) error {
 		return errors.New("bloco sem hash")
 	}
 
-	if !n.validateBlockTransactions(block) {
-		return errors.New("transacoes do bloco invalidas")
-	}
-
 	// Verifica se este bloco causará uma reorganização
 	oldBestHash := n.blockchain.GetLatestHash()
 
-	result, err := n.blockchain.AddBlock(*block)
+	adminPubKey := strings.TrimSpace(os.Getenv("ADMIN_PUB"))
+	result, err := n.blockchain.AddBlock(*block, adminPubKey)
 	if err != nil {
 		if errors.Is(err, miner.ErrDuplicateBlock) {
 			return nil
@@ -272,12 +278,16 @@ func (n *NodeServer) processBlock(block *miner.Block) error {
 		return err
 	}
 
+	if result.TipUpdated {
+		n.notifyBlockArrived()
+	}
+
 	if !result.TipUpdated {
 		return nil
 	}
 
 	log.Printf("[Consenso] Reorganização detectada - Tip atualizado")
-	restoreTxs, err := n.handleReorganization(oldBestHash, result.NewTipHash)
+	restoreTxs, err := n.handleReorganization(oldBestHash, result.NewTipHash, result.Discarded)
 	if err != nil {
 		log.Printf("[%s] erro na reorganizacao: %v", n.id, err)
 		return err
@@ -293,10 +303,14 @@ func (n *NodeServer) processBlock(block *miner.Block) error {
 		}
 	}
 
+	if removed := n.mempool.PruneInvalid(); len(removed) > 0 {
+		log.Printf("[%s] mempool invalidado apos reorg: %d transacoes removidas", n.id, len(removed))
+	}
+
 	return nil
 }
 
-func (n *NodeServer) handleReorganization(oldTipHash, newTipHash []byte) ([]*transaction.Transaction, error) {
+func (n *NodeServer) handleReorganization(oldTipHash, newTipHash []byte, discardedBlocks []miner.Block) ([]*transaction.Transaction, error) {
 	// A reorganização já foi feita pelo AddBlock, agora precisamos
 	// devolver as transações dos blocos desconectados para a mempool
 
@@ -330,7 +344,7 @@ func (n *NodeServer) handleReorganization(oldTipHash, newTipHash []byte) ([]*tra
 		}
 	}
 
-	for _, block := range n.blockchain.PopDiscardedSnapshot() {
+	for _, block := range discardedBlocks {
 		for _, tx := range block.Transactions {
 			txCopy := tx
 			addCandidate(&txCopy)
@@ -350,69 +364,23 @@ func (n *NodeServer) validateBlockTransactions(block *miner.Block) bool {
 	adminPubKey := strings.TrimSpace(os.Getenv("ADMIN_PUB"))
 
 	stateCopy := n.state.Clone()
-	for _, tx := range block.Transactions {
-		if err := stateCopy.EnsureAccount(tx.PublKey); err != nil {
-			log.Printf("[%s] falha ao garantir conta de publicador: %v", n.id, err)
-			return false
-		}
-		if err := stateCopy.EnsureAccount(tx.Recipient); err != nil {
-			log.Printf("[%s] falha ao garantir conta de destinatario: %v", n.id, err)
-			return false
-		}
-
-		// Validação básica
-		if err := tx.Validate(stateCopy); err != nil {
-			log.Printf("[%s] bloco contem transacao invalida %s: %v", n.id, tx.ID, err)
-			return false
-		}
-
-		// Validação de regras de consenso específicas usando a chave limpa
-		if err := tx.ValidateConsensusRules(stateCopy, adminPubKey); err != nil {
-			log.Printf("[%s] bloco contem transacao que viola consenso %s: %v", n.id, tx.ID, err)
-			return false
-		}
-
-		if err := tx.Execute(stateCopy); err != nil {
-			log.Printf("[%s] bloco contem transacao invalida %s: %v", n.id, tx.ID, err)
-			return false
-		}
+	if err := miner.ValidateTransactionsAgainstState(stateCopy, *block, adminPubKey); err != nil {
+		log.Printf("[%s] bloco contem transacao invalida ou inconsistente: %v", n.id, err)
+		return false
 	}
 	return true
 }
 
 func (n *NodeServer) rebuildStateFromCanonicalChain() error {
 	chain := n.blockchain.GetCanonicalChain()
-	state := transaction.NewAccountState()
-
-	for _, block := range chain {
-		for _, tx := range block.Transactions {
-			if err := state.EnsureAccount(tx.PublKey); err != nil {
-				return err
-			}
-			if err := state.EnsureAccount(tx.Recipient); err != nil {
-				return err
-			}
-			if err := tx.Execute(state); err != nil {
-				return err
-			}
-		}
+	state, _, err := miner.BuildStateFromChain(chain)
+	if err != nil {
+		return err
 	}
 
 	n.state = state
 	n.mempool = transaction.NewMempool(state)
 	return nil
-}
-
-func (n *NodeServer) removeBlockTransactionsFromMempool(block *miner.Block) {
-	var ids []string
-	for _, tx := range block.Transactions {
-		if tx.ID != "" {
-			ids = append(ids, tx.ID)
-		}
-	}
-	if len(ids) > 0 {
-		n.mempool.Remove(ids)
-	}
 }
 
 func (n *NodeServer) createGenesisBlock() error {
@@ -425,6 +393,13 @@ func (n *NodeServer) createGenesisBlock() error {
 		return err
 	}
 	return n.blockTransport.Publish(genesis)
+}
+
+func (n *NodeServer) notifyBlockArrived() {
+	select {
+	case n.blockArrived <- struct{}{}:
+	default:
+	}
 }
 
 func (n *NodeServer) miningLoop() {
@@ -471,8 +446,34 @@ func (n *NodeServer) miningLoop() {
 		currentDiff := atomic.LoadInt32(&n.difficulty)
 		block := miner.NewBlock(n.blockchain.GetLatestHash(), txs, currentDiff, n.id)
 
+		// Limpa qualquer notificação passada antes de começar a minerar
+		select {
+		case <-n.blockArrived:
+		default:
+		}
+
 		// 2. Inicia o cálculo do Hash (isso leva tempo)
-		miner.Mine(block)
+		mineCtx, mineCancel := context.WithCancel(n.ctx)
+		go func() {
+			select {
+			case <-mineCtx.Done():
+			case <-n.blockArrived:
+				mineCancel()
+			}
+		}()
+
+		mined := miner.MineWithContext(mineCtx, block)
+		mineCancel()
+
+		if !mined {
+			log.Printf("[%s] bloco mineracao cancelada por novo bloco", n.id)
+			continue
+		}
+
+		if !bytes.Equal(n.blockchain.GetLatestHash(), block.HashOfPrevious) {
+			log.Printf("[%s] bloco minerado sobre tip antigo, descartando", n.id)
+			continue
+		}
 
 		if !n.validateBlockTransactions(block) {
 			log.Printf("[%s] bloco descartado (stale): outro no minerou primeiro", n.id)

@@ -72,13 +72,15 @@ const buildLocalCanonicalHashSet = (rawBlocks) => {
     }
 
     const byHash = new Map(blocks.map((block) => [block.hash, block]));
-    const bestTip = [...blocks].sort((a, b) => {
-        if (b.height !== a.height) {
-            return b.height - a.height;
-        }
-        return b.timestamp - a.timestamp;
-    })[0];
+    const maxHeight = Math.max(...blocks.map((block) => block.height));
+    const candidates = blocks.filter((block) => block.height === maxHeight);
 
+    // Se houver mais de um tip no mesmo nivel, ainda nao ha consenso localizado.
+    if (candidates.length > 1) {
+        return new Set();
+    }
+
+    const bestTip = candidates[0];
     const localCanonical = new Set();
     let current = bestTip;
 

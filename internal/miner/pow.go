@@ -11,21 +11,31 @@ import (
 // Mine realiza o Proof of Work para o bloco de forma concorrente.
 // Ele distribui o espaço de busca do Nonce entre as CPUs disponíveis.
 func Mine(block *Block) {
+	_ = MineWithContext(context.Background(), block)
+}
+
+// MineWithContext realiza o Proof of Work com suporte a cancelamento.
+// Retorna true se o bloco foi minerado com sucesso antes do cancelamento.
+func MineWithContext(ctx context.Context, block *Block) bool {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	numWorkers := runtime.NumCPU()
 	var wg sync.WaitGroup
 	var found int32 // flag atômica para encerrar as goroutines
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	for w := 0; w < numWorkers; w++ {
 		wg.Add(1)
 		go func(workerID int) {
 			defer wg.Done()
-			
+
 			// Cópia local do header para que cada goroutine altere seu próprio nonce livre de mutexes
 			headerCopy := block.Header
-			
+
 			// Dividindo o trabalho: cada worker pula a contagem de acordo com numWorkers
 			for nonce := int32(workerID); ; nonce += int32(numWorkers) {
 				// Verifica se algum outro worker já encontrou
@@ -57,4 +67,5 @@ func Mine(block *Block) {
 	}
 
 	wg.Wait()
+	return atomic.LoadInt32(&found) == 1
 }

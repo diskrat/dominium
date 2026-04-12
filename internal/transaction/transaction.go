@@ -33,6 +33,9 @@ func NewTransactionWithTimestamp(publKey, recipient, nftID string, transactionTy
 		Recipient: recipient,
 		NFTID:     nftID,
 	}
+	if err := tx.SetID(); err != nil {
+		return nil, err
+	}
 	return tx, nil
 }
 

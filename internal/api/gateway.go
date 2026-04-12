@@ -83,6 +83,7 @@ type Gateway struct {
 	metaMu           sync.RWMutex
 	genMu            sync.Mutex
 	networkSyncReady bool
+	discardedTxCount int
 	adminPubKey      string
 }
 
@@ -248,8 +249,10 @@ func (g *Gateway) processBlock(block *miner.Block) error {
 		return errors.New("bloco nulo")
 	}
 
+	adminPubKey := strings.TrimSpace(g.adminPubKey)
+
 	// Adiciona o bloco à blockchain
-	result, err := g.blockchain.AddBlock(*block)
+	result, err := g.blockchain.AddBlock(*block, adminPubKey)
 	if err != nil {
 		if errors.Is(err, miner.ErrDuplicateBlock) {
 			return nil
@@ -257,6 +260,16 @@ func (g *Gateway) processBlock(block *miner.Block) error {
 		if !errors.Is(err, miner.ErrOrphanBlock) {
 			return err
 		}
+	}
+
+	if len(result.Discarded) > 0 {
+		discardedTxCount := 0
+		for _, discardedBlock := range result.Discarded {
+			discardedTxCount += len(discardedBlock.Transactions)
+		}
+		g.metaMu.Lock()
+		g.discardedTxCount += discardedTxCount
+		g.metaMu.Unlock()
 	}
 
 	if err != nil || !result.TipUpdated {
@@ -272,22 +285,9 @@ func (g *Gateway) processBlock(block *miner.Block) error {
 
 func (g *Gateway) rebuildStateFromCanonicalChain() error {
 	chain := g.blockchain.GetCanonicalChain()
-	state := transaction.NewAccountState()
-	chainTxs := make(map[string]bool)
-
-	for _, block := range chain {
-		for _, tx := range block.Transactions {
-			chainTxs[tx.ID] = true
-			if err := state.EnsureAccount(tx.PublKey); err != nil {
-				return err
-			}
-			if err := state.EnsureAccount(tx.Recipient); err != nil {
-				return err
-			}
-			if err := tx.Execute(state); err != nil {
-				return err
-			}
-		}
+	state, chainTxs, err := miner.BuildStateFromChain(chain)
+	if err != nil {
+		return err
 	}
 
 	g.stateMu.RLock()
@@ -297,25 +297,7 @@ func (g *Gateway) rebuildStateFromCanonicalChain() error {
 	}
 	g.stateMu.RUnlock()
 
-	newMempool := make(map[string]*transaction.Transaction)
-	for id, tx := range pending {
-		if chainTxs[id] {
-			continue
-		}
-		if err := state.EnsureAccount(tx.PublKey); err != nil {
-			continue
-		}
-		if err := state.EnsureAccount(tx.Recipient); err != nil {
-			continue
-		}
-		if err := tx.Validate(state); err != nil {
-			continue
-		}
-		if err := tx.ValidateConsensusRules(state, g.adminPubKey); err != nil {
-			continue
-		}
-		newMempool[id] = tx
-	}
+	newMempool := transaction.FilterValidTransactions(state, pending, chainTxs, g.adminPubKey)
 
 	g.stateMu.Lock()
 	g.state = state
@@ -373,7 +355,6 @@ func (g *Gateway) buildNetworkStatus() networkStatusResponse {
 	chain := g.blockchain.GetCanonicalChain()
 	allNodesSnapshot := g.blockchain.GetAllBlocks()
 	orphansSnapshot := g.blockchain.GetOrphansSnapshot()
-	discardedSnapshot := g.blockchain.GetDiscardedSnapshot()
 
 	canonicalChain := make([]BlockMetadata, 0, len(chain))
 	canonicalTxCount := 0
@@ -387,10 +368,9 @@ func (g *Gateway) buildNetworkStatus() networkStatusResponse {
 		canonicalChain = append(canonicalChain, buildBlockMetadata(hashHex, block, height))
 	}
 
-	allBlocks := make([]BlockMetadata, 0, len(allNodesSnapshot)+len(orphansSnapshot)+len(discardedSnapshot))
+	allBlocks := make([]BlockMetadata, 0, len(allNodesSnapshot)+len(orphansSnapshot))
 	allBlocksTxCount := 0
 	orphanTxCount := 0
-	discardedTxCount := 0
 	for hashHex, node := range allNodesSnapshot {
 		block := node.Block
 		allBlocksTxCount += len(block.Transactions)
@@ -398,10 +378,6 @@ func (g *Gateway) buildNetworkStatus() networkStatusResponse {
 	}
 	for hashHex, block := range orphansSnapshot {
 		orphanTxCount += len(block.Transactions)
-		allBlocks = append(allBlocks, buildBlockMetadata(hashHex, block, 0))
-	}
-	for hashHex, block := range discardedSnapshot {
-		discardedTxCount += len(block.Transactions)
 		allBlocks = append(allBlocks, buildBlockMetadata(hashHex, block, 0))
 	}
 
@@ -433,10 +409,16 @@ func (g *Gateway) buildNetworkStatus() networkStatusResponse {
 		CanonicalTxCount: canonicalTxCount,
 		AllBlocksTxCount: allBlocksTxCount,
 		OrphanTxCount:    orphanTxCount,
-		DiscardedTxCount: discardedTxCount,
+		DiscardedTxCount: g.getDiscardedTxCount(),
 		MempoolTxCount:   len(mempoolResponse),
 		Timestamp:        time.Now().UnixNano(),
 	}
+}
+
+func (g *Gateway) getDiscardedTxCount() int {
+	g.metaMu.RLock()
+	defer g.metaMu.RUnlock()
+	return g.discardedTxCount
 }
 
 func (g *Gateway) handlePostTransaction(w http.ResponseWriter, r *http.Request) {
@@ -520,18 +502,9 @@ func (g *Gateway) handlePostTransaction(w http.ResponseWriter, r *http.Request) 
 	}
 
 	g.stateMu.RLock()
-	if err := tx.Validate(g.state); err != nil {
+	if err := transaction.ValidateTransactionForState(g.state, tx, g.adminPubKey); err != nil {
 		g.stateMu.RUnlock()
 		resp := TransactionResponse{TxID: tx.ID, Error: fmt.Sprintf("validacao falhou: %v", err)}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(resp)
-		return
-	}
-
-	if err := tx.ValidateConsensusRules(g.state, g.adminPubKey); err != nil {
-		g.stateMu.RUnlock()
-		resp := TransactionResponse{TxID: tx.ID, Error: fmt.Sprintf("consenso violado: %v", err)}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
 		json.NewEncoder(w).Encode(resp)

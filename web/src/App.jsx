@@ -61,7 +61,18 @@ const App = () => {
     const handleChaosMintClick = async (count = chaosMintCount) => {
         setIsMinting(true);
         const toastId = toast.loading("Disparando transacoes...");
-        const successCount = await executeChaosMint(count);
+        let localAdded = 0;
+        const onSuccess = (txId) => {
+            // Optimistically update mempool list and counter so UI is responsive
+            const id = txId || `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+            const txObj = { id, timestamp: Date.now() * 1000000, type: 2 };
+            setMempool((prev) => [txObj, ...prev]);
+            setTransactionStats((prev) => ({ ...(prev || {}), mempoolTxCount: (prev?.mempoolTxCount || 0) + 1 }));
+            localAdded++;
+        };
+
+        const successCount = await executeChaosMint(count, onSuccess);
+
         if (successCount > 0) {
             toast.success(`${successCount} transacoes enviadas.`, {
                 id: toastId,
@@ -169,7 +180,21 @@ const App = () => {
     const handleDoubleSpendClick = async () => {
         const toastId = toast.loading("Iniciando ataque de gasto duplo...");
         try {
-            const data = await triggerDoubleSpend();
+            const result = await triggerDoubleSpend();
+            const responseBody =
+                typeof result.body === "string"
+                    ? result.body
+                    : JSON.stringify(result.body, null, 0);
+
+            if (!result.ok) {
+                toast.error(
+                    `Falha no ataque: ${result.status} ${result.statusText} - ${responseBody}`,
+                    { id: toastId },
+                );
+                return;
+            }
+
+            const data = result.body;
             toast("Ataque enviado.", {
                 id: toastId,
                 description: `NFT: ${data.nft}. Aguardando validacao dos nos.`,

@@ -83,3 +83,54 @@ func (m *Mempool) Remove(txIDs []string) {
 		delete(m.transactions, id)
 	}
 }
+
+func (m *Mempool) PruneInvalid() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	var removed []string
+	for id, tx := range m.transactions {
+		if err := tx.Validate(m.state); err != nil {
+			delete(m.transactions, id)
+			removed = append(removed, id)
+		}
+	}
+	return removed
+}
+
+func ValidateTransactionForState(state *AccountState, tx *Transaction, adminPubKey string) error {
+	if state == nil {
+		return errors.New("estado nulo")
+	}
+	if tx == nil {
+		return errors.New("transacao nula")
+	}
+
+	if err := state.EnsureAccount(tx.PublKey); err != nil {
+		return err
+	}
+	if err := state.EnsureAccount(tx.Recipient); err != nil {
+		return err
+	}
+	if err := tx.Validate(state); err != nil {
+		return err
+	}
+	return tx.ValidateConsensusRules(state, adminPubKey)
+}
+
+func FilterValidTransactions(state *AccountState, txs map[string]*Transaction, excludeIDs map[string]bool, adminPubKey string) map[string]*Transaction {
+	valid := make(map[string]*Transaction)
+	for id, tx := range txs {
+		if excludeIDs != nil && excludeIDs[id] {
+			continue
+		}
+		if tx == nil {
+			continue
+		}
+		if err := ValidateTransactionForState(state, tx, adminPubKey); err != nil {
+			continue
+		}
+		valid[id] = tx
+	}
+	return valid
+}

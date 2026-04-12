@@ -33,16 +33,33 @@ export const generateWallet = async () => {
 };
 
 export const triggerDoubleSpend = async () => {
-    const response = await request("/attacks/double-spend", { method: "POST" });
-    return response.json();
+    const response = await fetch(`${API_BASE_URL}/attacks/double-spend`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+    });
+
+    const text = await response.text();
+    let body;
+    try {
+        body = JSON.parse(text);
+    } catch (error) {
+        body = text;
+    }
+
+    return {
+        ok: response.ok,
+        status: response.status,
+        statusText: response.statusText,
+        body,
+    };
 };
 
-export const executeChaosMint = async (count = 10) => {
+export const executeChaosMint = async (count = 50, onSuccess) => {
     let successCount = 0;
 
     for (let i = 0; i < count; i++) {
         try {
-            await request("/transactions", {
+            const resp = await request("/transactions", {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json",
@@ -53,7 +70,24 @@ export const executeChaosMint = async (count = 10) => {
                     nft_id: `nft_caos_${Date.now()}_${i}`,
                 }),
             });
+
+            // parse returned transaction id (if any) and notify caller
+            let data = null;
+            try {
+                data = await resp.json();
+            } catch (e) {
+                data = null;
+            }
+
             successCount++;
+            if (typeof onSuccess === "function") {
+                const txId = data && (data.tx_id || data.TxID) ? (data.tx_id || data.TxID) : null;
+                try {
+                    onSuccess(txId);
+                } catch (e) {
+                    console.error("onSuccess callback error:", e);
+                }
+            }
         } catch (error) {
             console.error("Falha ao comunicar com a API Gateway:", error);
         }

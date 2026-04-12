@@ -1,11 +1,11 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"time"
 
 	"dominium/internal/api"
@@ -22,21 +22,27 @@ var upgrader = websocket.Upgrader{
 
 // NetworkState repassa as informações completas do Gateway para o React
 type NetworkState struct {
-	Nodes          []NodeState               `json:"nodes"`
-	AllBlocks      []api.BlockMetadata       `json:"all_blocks"`
-	CanonicalChain []api.BlockMetadata       `json:"canonical_chain"`
-	Accounts       []AccountState            `json:"accounts"`
-	Mempool        []transaction.Transaction `json:"mempool"`
-	Timestamp      int64                     `json:"timestamp"`
+	Nodes            []NodeState               `json:"nodes"`
+	AllBlocks        []api.BlockMetadata       `json:"all_blocks"`
+	CanonicalChain   []api.BlockMetadata       `json:"canonical_chain"`
+	Accounts         []AccountState            `json:"accounts"`
+	Mempool          []transaction.Transaction `json:"mempool"`
+	CanonicalTxCount int                       `json:"canonical_tx_count"`
+	AllBlocksTxCount int                       `json:"all_blocks_tx_count"`
+	OrphanTxCount    int                       `json:"orphan_tx_count"`
+	DiscardedTxCount int                       `json:"discarded_tx_count"`
+	MempoolTxCount   int                       `json:"mempool_tx_count"`
+	Timestamp        int64                     `json:"timestamp"`
 }
 
 type NodeState struct {
-	ID          string              `json:"id"`
-	Status      string              `json:"status"`
-	Difficulty  int32               `json:"difficulty"`
-	MempoolSize int                 `json:"mempoolSize"`
-	BlockHeight int                 `json:"blockHeight"`
-	LocalBlocks []api.BlockMetadata `json:"local_blocks"`
+	ID                  string              `json:"id"`
+	Status              string              `json:"status"`
+	Difficulty          int32               `json:"difficulty"`
+	BlockHeight         int                 `json:"blockHeight"`
+	LocalChainAvailable bool                `json:"local_chain_available"`
+	CanonicalMatch      bool                `json:"canonical_match"`
+	LocalBlocks         []api.BlockMetadata `json:"local_blocks"`
 }
 
 type AccountState struct {
@@ -45,14 +51,14 @@ type AccountState struct {
 }
 
 type VisualizerServer struct {
-	gateway   *api.Gateway
+	apiURL    string
 	clients   map[*websocket.Conn]bool
 	broadcast chan NetworkState
 }
 
-func NewVisualizerServer(gateway *api.Gateway) *VisualizerServer {
+func NewVisualizerServer(apiURL string) *VisualizerServer {
 	return &VisualizerServer{
-		gateway:   gateway,
+		apiURL:    apiURL,
 		clients:   make(map[*websocket.Conn]bool),
 		broadcast: make(chan NetworkState, 100),
 	}
@@ -96,21 +102,37 @@ func (vs *VisualizerServer) sendCurrentState(conn *websocket.Conn) {
 }
 
 func (vs *VisualizerServer) collectNetworkState() NetworkState {
-	resp, err := http.Get("http://api-gateway:8085/network/status")
+	gatewayURL := vs.apiURL
+	if gatewayURL == "" {
+		gatewayURL = "http://api-gateway:8085"
+	}
+
+	resp, err := http.Get(fmt.Sprintf("%s/network/status", gatewayURL))
 	if err != nil {
-		log.Printf("Error calling gateway API: %v", err)
+		log.Printf("Error calling gateway API %s: %v", gatewayURL, err)
+		if gatewayURL != "http://localhost:8085" {
+			resp, err = http.Get("http://localhost:8085/network/status")
+		}
+	}
+	if err != nil {
+		log.Printf("Error calling fallback gateway API: %v", err)
 		return vs.getMockNetworkState()
 	}
 	defer resp.Body.Close()
 
 	var status struct {
-		NetworkHeight  int                       `json:"network_height"`
-		NodesActive    []string                  `json:"nodes_active"`
-		CanonicalChain []api.BlockMetadata       `json:"canonical_chain"`
-		AllBlocks      []api.BlockMetadata       `json:"all_blocks"`
-		Accounts       []AccountState            `json:"accounts"`
-		Mempool        []transaction.Transaction `json:"mempool"`
-		Timestamp      int64                     `json:"timestamp"`
+		NetworkHeight    int                       `json:"network_height"`
+		NodesActive      []string                  `json:"nodes_active"`
+		CanonicalChain   []api.BlockMetadata       `json:"canonical_chain"`
+		AllBlocks        []api.BlockMetadata       `json:"all_blocks"`
+		Accounts         []AccountState            `json:"accounts"`
+		Mempool          []transaction.Transaction `json:"mempool"`
+		CanonicalTxCount int                       `json:"canonical_tx_count"`
+		AllBlocksTxCount int                       `json:"all_blocks_tx_count"`
+		OrphanTxCount    int                       `json:"orphan_tx_count"`
+		DiscardedTxCount int                       `json:"discarded_tx_count"`
+		MempoolTxCount   int                       `json:"mempool_tx_count"`
+		Timestamp        int64                     `json:"timestamp"`
 	}
 
 	if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
@@ -132,36 +154,62 @@ func (vs *VisualizerServer) collectNetworkState() NetworkState {
 	nodes := make([]NodeState, len(clusterNodes))
 
 	for i, nodeID := range clusterNodes {
-		// Calcula a porta do nó (node-1 -> 8082, node-2 -> 8083, etc.)
-		port := 8081 + (i + 1)
+		// Calcula a porta do nó (node-1 -> 8081, node-2 -> 8082, etc.)
+		port := 8081 + i
 		var localBlocks []api.BlockMetadata
 
 		// Tenta buscar a blockchain local daquele nó específico
 		localResp, localErr := http.Get(fmt.Sprintf("http://%s:%d/local-chain", nodeID, port))
+		localChainAvailable := false
+		canonicalMatch := false
 		if localErr == nil {
+			localChainAvailable = true
 			json.NewDecoder(localResp.Body).Decode(&localBlocks)
 			localResp.Body.Close()
+			canonicalMatch = compareCanonicalChain(localBlocks, status.CanonicalChain)
 		} else {
 			log.Printf("Falha ao ler API local do %s na porta %d: %v", nodeID, port, localErr)
 		}
 
 		nodes[i] = NodeState{
-			ID:          nodeID,
-			Status:      nodeStatus,
-			Difficulty:  currentDifficulty,
-			BlockHeight: status.NetworkHeight,
-			LocalBlocks: localBlocks, // Insere a árvore individual
+			ID:                  nodeID,
+			Status:              nodeStatus,
+			Difficulty:          currentDifficulty,
+			BlockHeight:         status.NetworkHeight,
+			LocalChainAvailable: localChainAvailable,
+			CanonicalMatch:      canonicalMatch,
+			LocalBlocks:         localBlocks, // Insere a árvore individual
 		}
 	}
 
 	return NetworkState{
-		Nodes:          nodes,
-		AllBlocks:      status.AllBlocks,
-		CanonicalChain: status.CanonicalChain,
-		Accounts:       status.Accounts,
-		Mempool:        status.Mempool,
-		Timestamp:      status.Timestamp,
+		Nodes:            nodes,
+		AllBlocks:        status.AllBlocks,
+		CanonicalChain:   status.CanonicalChain,
+		Accounts:         status.Accounts,
+		Mempool:          status.Mempool,
+		CanonicalTxCount: status.CanonicalTxCount,
+		AllBlocksTxCount: status.AllBlocksTxCount,
+		OrphanTxCount:    status.OrphanTxCount,
+		DiscardedTxCount: status.DiscardedTxCount,
+		MempoolTxCount:   status.MempoolTxCount,
+		Timestamp:        status.Timestamp,
 	}
+}
+
+func compareCanonicalChain(localBlocks, canonicalBlocks []api.BlockMetadata) bool {
+	if len(localBlocks) != len(canonicalBlocks) {
+		return false
+	}
+
+	for i := range localBlocks {
+		localHash := localBlocks[i].Hash
+		canonicalHash := canonicalBlocks[i].Hash
+		if localHash != canonicalHash {
+			return false
+		}
+	}
+	return true
 }
 
 func (vs *VisualizerServer) getMockNetworkState() NetworkState {
@@ -173,11 +221,11 @@ func (vs *VisualizerServer) getMockNetworkState() NetworkState {
 
 	for i, nodeID := range clusterNodes {
 		nodes[i] = NodeState{
-			ID:          nodeID,
-			Status:      "ocioso", // Começa cinza (Ocioso) para não piscar verde à toa
-			Difficulty:  0,        // Fica 0 até ler a dificuldade real do Kafka
-			MempoolSize: 0,
-			BlockHeight: 0, // Começa no bloco 0
+			ID:             nodeID,
+			Status:         "ocioso", // Começa cinza (Ocioso) para não piscar verde à toa
+			Difficulty:     0,        // Fica 0 até ler a dificuldade real do Kafka
+			BlockHeight:    0,        // Começa no bloco 0
+			CanonicalMatch: false,
 		}
 	}
 
@@ -273,12 +321,12 @@ func (vs *VisualizerServer) handleRaceAttack(w http.ResponseWriter, r *http.Requ
 }
 
 func main() {
-	ctx := context.Background()
+	apiURL := os.Getenv("API_URL")
+	if apiURL == "" {
+		apiURL = "http://api-gateway:8085"
+	}
 
-	// Initialize gateway (simplified - in real implementation, connect to actual running gateway)
-	gateway := api.NewGateway(ctx, "visualizer-gateway", 8081, []string{"kafka:9092"})
-
-	visualizer := NewVisualizerServer(gateway)
+	visualizer := NewVisualizerServer(apiURL)
 
 	// Start state broadcaster
 	go visualizer.startStateBroadcaster()
