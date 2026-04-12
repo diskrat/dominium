@@ -114,6 +114,8 @@ KAFKA_BROKERS=kafka:9092  # Brokers Kafka (não mude)
 DIFFICULTY=4              # Dificuldade PoW (4, 8, 16...)
 ```
 
+> O `docker-compose.yml` e o `cmd/api/Dockerfile` usam `ADMIN_KEY` e `ADMIN_PUB` para iniciar o API Gateway com a identidade administrativa.
+
 ---
 
 **Pronto!** O sistema Dominium está rodando com todos os componentes no Docker Compose.

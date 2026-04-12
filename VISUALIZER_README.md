@@ -15,7 +15,7 @@ Visualizador de Rede e Simulador de Ataques para a blockchain Dominium - uma fer
 
 - **Chaos Mint**: Botão que dispara 10 transações de Mint simultaneamente via API
 - **Gerador de Carteiras**: Cria pares de chaves ECDSA aleatórios on-the-fly
-- **Visualização de Fluxo**: Mostra graficamente API → Kafka → Mempool dos nós (placeholder implementado)
+- **Visualização de Fluxo**: Mostra graficamente API → Kafka → Mempool dos nós
 
 ### Modulo de Ataque: Double Spend
 
@@ -25,7 +25,7 @@ Visualizador de Rede e Simulador de Ataques para a blockchain Dominium - uma fer
 
 ### Integração Técnica
 
-- **WebSocket/Socket.io**: Atualizações em tempo real da rede (conectado ao backend Go)
+- **WebSocket**: Atualizações em tempo real da rede usando `gorilla/websocket` (conectado ao backend Go)
 - **Modo de Depuração**: Capacidade de pausar mineração para acumular transações (planejado)
 
 ## Como Executar
@@ -73,10 +73,16 @@ docker-compose up visualizer
 
 - **Frontend**: http://localhost:8080
 - **WebSocket**: ws://localhost:8080/ws
-- **API Endpoints**:
-    - `POST /api/chaos-mint` - Dispara 10 transações de mint
-    - `POST /api/generate-identity` - Gera nova identidade
-    - `POST /api/race-attack` - Simula ataque de corrida
+- **API Gateway**: http://localhost:8085
+
+O front-end consome diretamente o API Gateway em 8085 para gerenciar transações e simulações de rede.
+
+### Endpoints usados pelo front-end
+
+- `POST /transactions` - Envia transações de mint e transfer
+- `GET /wallet/generate` - Gera nova carteira ECDSA
+- `POST /attacks/double-spend` - Inicia ataque de gasto duplo
+- `POST /network/difficulty` - Atualiza a dificuldade de mineração na rede
 
 ## Arquitetura
 
@@ -124,8 +130,8 @@ go build ./cmd/visualizer && ./visualizer
 
 ## Tecnologias Utilizadas
 
-- **Frontend**: React 18, JavaScript, Ant Design, Socket.io-client
-- **Backend**: Go, Gorilla WebSocket, JSON
+- **Frontend**: React 18, JavaScript, Ant Design
+- **Backend**: Go, gorilla/websocket, JSON
 - **Build**: Docker multi-stage, Webpack
 - **Comunicação**: WebSocket para updates em tempo real
 

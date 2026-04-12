@@ -44,8 +44,8 @@ Este projeto implementa uma blockchain distribuída baseada em Proof of Work (Po
 ### 4. Mempool e API
 
 - Mempool mantendo as transações pendentes.
-- API dedicada para a submissão de novas transações.
-- Script para criação de transações aleatórias usando seed, de forma a garantir a reprodutibilidade.
+- API dedicada para a submissão de novas transações de mint e transfer.
+- Geração de transações e carteiras suportada pelo gateway e pelo visualizer.
 
 ### 5. Experimentação e Visualização
 
@@ -84,6 +84,7 @@ Este projeto implementa uma blockchain distribuída baseada em Proof of Work (Po
 ```bash
 # 1. Gerar configuração
 bash generate-env.sh
+# O arquivo .env gerado inclui ADMIN_KEY e ADMIN_PUB usados pelo API Gateway.
 
 # 2. Iniciar tudo (7 serviços simultaneamente)
 docker-compose up -d
@@ -159,16 +160,9 @@ bash generate-env.sh
 ```bash
 # Tudo em um comando
 docker-compose up -d
-
-# Ou manual para controle fino:
-docker-compose up -d kafka zookeeper
-go run ./cmd/node -id node-1 -p2p localhost:9092 -mine -difficulty 4
-go run ./cmd/node -id node-2 -p2p localhost:9092 -mine -difficulty 4
-go run ./cmd/node -id node-3 -p2p localhost:9092 -mine -difficulty 4
-go run ./cmd/api -port 8085 -id api-gateway -p2p localhost:9092 \
-  -admin-key $(grep ADMIN_KEY .env | cut -d'=' -f2) \
-  -admin-pub $(grep ADMIN_PUB .env | cut -d'=' -f2)
 ```
+
+> Para execução manual, use os passos descritos em “Método Manual” acima.
 
 ### Teste de Dificuldade (Demonstração de 20% da Nota)
 
@@ -183,20 +177,6 @@ go run ./cmd/node -id node-test -p2p localhost:9092 -mine -difficulty 8
 
 # Dificuldade alta (lento - ~30+ segundos)
 go run ./cmd/node -id node-test -p2p localhost:9092 -mine -difficulty 16
-```
-
-### Uso de Seed para Transações Reprodutíveis
-
-O gerador de transações usa uma seed determinística para criar sempre as mesmas transações:
-
-```bash
-# No código Go - usar seed fixa para reprodutibilidade
-generator := transaction.NewGenerator(12345) // Seed sempre igual = transações sempre iguais
-
-# Para demonstração de ataque double spend:
-# 1. Use seed fixa para gerar NFT_ID previsível
-# 2. Tente mintar o mesmo NFT_ID duas vezes
-# 3. Sistema deve rejeitar a segunda transação
 ```
 
 ## Monitoramento e Testes

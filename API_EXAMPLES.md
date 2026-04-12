@@ -126,10 +126,10 @@ Resposta esperada:
 
 ### Gerar Carteira Aleatória
 
-POST /api/generate-identity
+POST /api/generate-wallet
 
 ```bash
-curl -X POST http://localhost:8080/api/generate-identity
+curl -X POST http://localhost:8080/api/generate-wallet
 ```
 
 Resposta esperada:
